@@ -18,17 +18,13 @@ load_dotenv(BASE_DIR / ".env")
 
 
 
-SECRET_KEY = os.environ.get("SECRET_KEY")
-
-# SECRET_KEY = os.environ.get(
-#     "SECRET_KEY",
-#     "dev-secret-key-only-for-local-machine"
-# )
+SECRET_KEY = os.environ.get("SECRET_KEY", "unsafe-secret-for-local")
 
 
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+
+DEBUG = os.environ.get("DEBUG", "False") == "True"
 
 #ALLOWED_HOSTS = []
 #(dev only)
@@ -164,6 +160,7 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 
 
