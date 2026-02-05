@@ -111,13 +111,13 @@ class ForgotPasswordSerializer(serializers.Serializer):
         return data
 
 
-class FirebaseLoginSerializer(serializers.Serializer):
-    firebase_token = serializers.CharField(required=True)
-    username = serializers.CharField(required=False, allow_blank=True)
-    first_name = serializers.CharField(required=False, allow_blank=True)
-    last_name = serializers.CharField(required=False, allow_blank=True)
-    location = serializers.CharField(required=False, allow_blank=True)
-    phone_number = serializers.CharField(required=False, allow_blank=True)
+# class FirebaseLoginSerializer(serializers.Serializer):
+#     firebase_token = serializers.CharField(required=True)
+#     username = serializers.CharField(required=False, allow_blank=True)
+#     first_name = serializers.CharField(required=False, allow_blank=True)
+#     last_name = serializers.CharField(required=False, allow_blank=True)
+#     location = serializers.CharField(required=False, allow_blank=True)
+#     phone_number = serializers.CharField(required=False, allow_blank=True)
 
 
 
