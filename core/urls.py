@@ -17,10 +17,18 @@ Including another URLconf
 
 # core/urls.py
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import path, include
+
+# " " not definied
+
+def home(request):
+    return JsonResponse({"status": "API is running"})
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path("", home),
     path('api/', include('api.urls')),
    # path('equipment/',include('equipment.urls')),
     path('api/equipment/', include('equipment.urls')),
