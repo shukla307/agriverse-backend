@@ -26,9 +26,13 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "unsafe-secret-for-local")
 
 DEBUG = os.environ.get("DEBUG", "False") == "True"
 
-#ALLOWED_HOSTS = []
-#(dev only)
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = os.environ.get(
+    "ALLOWED_HOSTS", "localhost"
+).split(",")
+
+
+
+
 
 # Application definition
 
@@ -86,7 +90,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'core.wsgi.application'
 
 
-# Database
+# Database  production: use DATABASE_URL env var (e.g. from Heroku)
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
 DATABASES = {
@@ -96,7 +100,7 @@ DATABASES = {
 }
 
 
-
+# # For local development, use SQLite (or set DATABASE_URL in .env to override)
 # DATABASES = {
 #     'default': {
 #         'ENGINE': 'django.db.backends.sqlite3',
