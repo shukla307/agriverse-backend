@@ -4,15 +4,14 @@ from rest_framework import serializers
 from django.contrib.auth import authenticate, password_validation, get_user_model
 from rest_framework import serializers
 from django.contrib.auth import get_user_model, password_validation
-
-User = get_user_model()
 import re
-
 User = get_user_model()
+
+
 PHONE_REGEX = re.compile(r'^\+?\d{7,15}$')
 
-User = get_user_model()
-PHONE_REGEX = re.compile(r'^\+?\d{7,15}$')
+# User = get_user_model()
+# PHONE_REGEX = re.compile(r'^\+?\d{7,15}$')
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -108,6 +107,13 @@ class ForgotPasswordSerializer(serializers.Serializer):
         )
 
         data["user"] = user
+
+        #new change date 9 april 2024 ksz
+        user.set_password(data["new_password"])
+        user.save()
+        #new changes end
+
+
         return data
 
 
