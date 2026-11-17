@@ -1,5 +1,35 @@
 # Agriverse backend (Django REST)
 
+> **Two versions live in this repo:**
+> - **`v1` branch: the new backend, where all work happens now.** It follows the plan in `~/agriverse/docs/` (05 data model, 06 API). It's described in the next section.
+> - **`master`: what's live on Render today** (the old app). Everything after "Old backend (master)" describes it. Don't push `v1` to `master` until launch day: the new API would break the app farmers already have.
+
+## v1 (new backend)
+
+- **Python 3.11** venv at `./venv` (the old 3.9 venv was renamed `venv-old-py39/`, safe to delete).
+- **PostgreSQL only**, also locally: Homebrew `postgresql@14`, database `agriverse_dev`. The `.env` has `DATABASE_URL=postgres:///agriverse_dev` and `DEBUG=True`. SQLite is not supported; the settings refuse to start without `DATABASE_URL`.
+- Apps:
+  - `core/`: settings and `errors.py`. Every error is `{"error": {"code", "fields"}}`; raise `ApiError("code", status)`.
+  - `accounts/`: phone-first `User`, with no username or password for farmers. `firebase.py` verifies Firebase ID tokens with only the project ID, so no secret key file is needed. `phone.py` holds the `+91[6-9]` rule.
+  - The old `api/` and `equipment/` folders are **switched off** (not in `INSTALLED_APPS` or urls) and will be deleted in the cleanup step.
+- Endpoints so far: `POST /api/auth/firebase/`, `POST /api/auth/token/refresh/`, `POST /api/auth/logout/`, `GET /api/me/`, `GET /api/app-config/`. The full plan is in `~/agriverse/docs/06-api.md`.
+- JWT: access 30 min, refresh 365 days, rotating + blacklist. Default permission is `IsAuthenticated`; public views set `AllowAny` + `authentication_classes = []`. Throttles are in settings (`auth_firebase` 10/h).
+
+```bash
+cd ~/agriverse-backend && source venv/bin/activate
+pip install -r requirements-dev.txt          # requirements.txt = production only
+python manage.py migrate
+python manage.py runserver 0.0.0.0:8000      # emulator reaches it at http://10.0.2.2:8000
+python -m pytest                             # Firebase is faked; uses a throwaway test_agriverse_dev DB
+```
+
+- `requirements.txt` is a full pin list generated from the venv (minus dev tools). After adding a package, regenerate it the same way and check with `pip install --dry-run --ignore-installed -r requirements.txt`.
+- `.claude/settings.json` blocks reading **and writing** any `.env*` file, including `.env.example`. Ask the owner to edit those.
+
+---
+
+# Old backend (master), live today
+
 The REST API for the Agriverse Flutter app (`~/agriverse_app`). Users can sign up, log in, list farm equipment or crop residue for rent, and search for equipment near a location.
 
 - Django 4.2, Django REST Framework 3.16, `djangorestframework_simplejwt` 5.5

@@ -4,7 +4,9 @@ __pycache__/
 
 # Virtual environment
 venv/
+venv-old-py39/
 .env
+.pytest_cache/
 
 # Django
 db.sqlite3
