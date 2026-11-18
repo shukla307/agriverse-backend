@@ -1,3 +1,6 @@
+from urllib.parse import unquote, urlsplit
+
+from django.conf import settings
 from rest_framework import serializers
 
 from .models import User
@@ -19,3 +22,45 @@ class FirebaseLoginSerializer(serializers.Serializer):
 
 class RefreshOnlySerializer(serializers.Serializer):
     refresh = serializers.CharField(max_length=2048)
+
+
+def profile_photo_path(firebase_uid: str) -> str:
+    """The one place a user's profile photo may live (same path as firebase/storage.rules)."""
+    return f"profiles/{firebase_uid}/avatar.jpg"
+
+
+def is_own_profile_photo(url: str, firebase_uid: str | None) -> bool:
+    """
+    True only for a Firebase Storage download link to THIS user's avatar in OUR bucket:
+    https://firebasestorage.googleapis.com/v0/b/<bucket>/o/profiles%2F<uid>%2Favatar.jpg?alt=media&token=…
+    Stops someone saving a link to another person's photo or to any other website.
+    """
+    if not firebase_uid:
+        return False
+    parts = urlsplit(url)
+    if parts.scheme != "https" or parts.netloc != "firebasestorage.googleapis.com":
+        return False
+    prefix = f"/v0/b/{settings.FIREBASE_STORAGE_BUCKET}/o/"
+    if not parts.path.startswith(prefix):
+        return False
+    return unquote(parts.path[len(prefix):]) == profile_photo_path(firebase_uid)
+
+
+class MeUpdateSerializer(serializers.Serializer):
+    """PATCH /api/me/ (S4 now; S20 Profile later). Both fields optional."""
+
+    name = serializers.CharField(min_length=2, max_length=80, trim_whitespace=True, required=False)
+    # "" removes the photo.
+    photo_url = serializers.CharField(max_length=500, allow_blank=True, trim_whitespace=True, required=False)
+
+    def validate_name(self, value: str) -> str:
+        # "Ramesh    Kumar" → "Ramesh Kumar"; inner newlines/tabs become one space.
+        value = " ".join(value.split())
+        if len(value) < 2:
+            raise serializers.ValidationError("too_short")
+        return value
+
+    def validate_photo_url(self, value: str) -> str:
+        if value and not is_own_profile_photo(value, self.context["user"].firebase_uid):
+            raise serializers.ValidationError("not_own_photo")
+        return value

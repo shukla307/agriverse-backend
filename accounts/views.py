@@ -11,7 +11,7 @@ from core.errors import ApiError
 from . import firebase
 from .models import User
 from .phone import is_indian_mobile
-from .serializers import FirebaseLoginSerializer, RefreshOnlySerializer, UserSerializer
+from .serializers import FirebaseLoginSerializer, MeUpdateSerializer, RefreshOnlySerializer, UserSerializer
 
 
 def _tokens_for(user: User) -> dict:
@@ -111,10 +111,24 @@ class LogoutView(APIView):
 
 
 class MeView(APIView):
-    """GET /api/me/ → the logged-in user."""
+    """
+    GET   /api/me/ → the logged-in user.
+    PATCH /api/me/ {name?, photo_url?} → the updated user (S4 name + photo).
+    """
 
     def get(self, request):
         return Response(UserSerializer(request.user).data)
+
+    def patch(self, request):
+        user = request.user
+        ser = MeUpdateSerializer(data=request.data, context={"user": user})
+        ser.is_valid(raise_exception=True)
+        changed = list(ser.validated_data)
+        for field, value in ser.validated_data.items():
+            setattr(user, field, value)
+        if changed:
+            user.save(update_fields=changed)
+        return Response(UserSerializer(user).data)
 
 
 class AppConfigView(APIView):
