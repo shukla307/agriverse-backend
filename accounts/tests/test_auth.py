@@ -8,7 +8,7 @@ from unittest import mock
 import pytest
 
 from accounts import firebase
-from accounts.models import User
+from accounts.models import Address, User
 
 pytestmark = pytest.mark.django_db
 
@@ -33,14 +33,16 @@ def test_new_phone_creates_user_and_returns_tokens(api):
     body = res.json()
     assert body["access"] and body["refresh"]
     assert body["is_new_user"] is True
-    assert body["user"] == {"id": body["user"]["id"], "phone": PHONE, "name": "", "photo_url": ""}
+    assert body["user"] == {"id": body["user"]["id"], "phone": PHONE, "name": "", "photo_url": "", "home_address": None}
     user = User.objects.get(phone=PHONE)
     assert user.firebase_uid == UID
     assert not user.has_usable_password()  # farmers never get a password
 
 
-def test_returning_user_with_name_is_not_new(api):
-    User.objects.create_user(phone=PHONE, firebase_uid=UID, name="Ramesh")
+def test_returning_user_with_name_and_home_is_not_new(api):
+    user = User.objects.create_user(phone=PHONE, firebase_uid=UID, name="Ramesh")
+    user.home_address = Address.objects.create(user=user, label="home", lat="25.438", lng="81.905")
+    user.save()
     with fake_firebase():
         res = login(api)
     assert res.status_code == 200
@@ -51,6 +53,13 @@ def test_returning_user_with_name_is_not_new(api):
 def test_user_without_name_still_counts_as_new(api):
     """Signed up but closed the app before typing a name: continue at S4."""
     User.objects.create_user(phone=PHONE, firebase_uid=UID)
+    with fake_firebase():
+        assert login(api).json()["is_new_user"] is True
+
+
+def test_user_with_name_but_no_home_address_still_counts_as_new(api):
+    """Closed the app on S5/S6: continue sign-up."""
+    User.objects.create_user(phone=PHONE, firebase_uid=UID, name="Ramesh")
     with fake_firebase():
         assert login(api).json()["is_new_user"] is True
 

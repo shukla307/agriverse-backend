@@ -48,6 +48,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     date_joined = models.DateTimeField(default=timezone.now)
     deleted_at = models.DateTimeField(null=True, blank=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
+    # Default place for listings and bookings. Set by the first saved address (S6).
+    home_address = models.ForeignKey(
+        "accounts.Address", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
 
     objects = UserManager()
 
@@ -59,3 +63,46 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return f"{self.name or '(no name)'} {self.phone or '(deleted)'}"
+
+
+class Address(models.Model):
+    """
+    A saved place: घर / खेत / अन्य (docs/05-data-model.md §3.2).
+    The pin (lat/lng) is what matters; names come from the phone's map lookup and may be blank.
+    """
+
+    class Label(models.TextChoices):
+        HOME = "home", "घर"
+        FIELD = "field", "खेत"
+        OTHER = "other", "अन्य"
+
+    # India's rough bounding box (docs/06-api.md §3).
+    LAT_MIN, LAT_MAX = 6, 37
+    LNG_MIN, LNG_MAX = 68, 98
+    MAX_PER_USER = 20
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="addresses")
+    label = models.CharField(max_length=10, choices=Label.choices)
+    label_other = models.CharField(max_length=60, blank=True)
+    lat = models.DecimalField(max_digits=9, decimal_places=6)
+    lng = models.DecimalField(max_digits=9, decimal_places=6)
+    village = models.CharField(max_length=120, blank=True)
+    district = models.CharField(max_length=80, blank=True)
+    state = models.CharField(max_length=80, blank=True)
+    # Private: shown to the other side only after a booking is accepted.
+    landmark = models.CharField(max_length=200, blank=True)
+    is_deleted = models.BooleanField(default=False)  # soft delete: old bookings keep their snapshot
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("created_at",)
+        indexes = [models.Index(fields=["user", "is_deleted"])]
+        constraints = [
+            models.CheckConstraint(
+                check=~models.Q(label="other") | ~models.Q(label_other=""),
+                name="address_other_needs_name",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.get_label_display()} {self.village or ''} ({self.lat}, {self.lng})"

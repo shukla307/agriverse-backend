@@ -9,9 +9,15 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from core.errors import ApiError
 
 from . import firebase
-from .models import User
+from .models import Address, User
 from .phone import is_indian_mobile
-from .serializers import FirebaseLoginSerializer, MeUpdateSerializer, RefreshOnlySerializer, UserSerializer
+from .serializers import (
+    AddressSerializer,
+    FirebaseLoginSerializer,
+    MeUpdateSerializer,
+    RefreshOnlySerializer,
+    UserSerializer,
+)
 
 
 def _tokens_for(user: User) -> dict:
@@ -73,8 +79,9 @@ class FirebaseLoginView(APIView):
         return Response(
             {
                 **_tokens_for(user),
-                # A user without a name hasn't finished sign-up (S4), so the app continues there.
-                "is_new_user": created or not user.name,
+                # Sign-up isn't finished without a name (S4) and a home address (S5/S6),
+                # so the app continues there.
+                "is_new_user": created or not user.name or user.home_address_id is None,
                 "user": UserSerializer(user).data,
             }
         )
@@ -129,6 +136,33 @@ class MeView(APIView):
         if changed:
             user.save(update_fields=changed)
         return Response(UserSerializer(user).data)
+
+
+class AddressListView(APIView):
+    """
+    GET  /api/me/addresses/ → my saved places (not deleted), oldest first.
+    POST /api/me/addresses/ → save a place (S6). The first one, or make_home=true,
+         becomes the home address. At most 20 per farmer.
+    Edit/delete come with Profile (S20).
+    """
+
+    def get(self, request):
+        rows = Address.objects.filter(user=request.user, is_deleted=False)
+        return Response(AddressSerializer(rows, many=True).data)
+
+    def post(self, request):
+        ser = AddressSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        make_home = ser.validated_data.pop("make_home", False)
+        with transaction.atomic():
+            user = User.objects.select_for_update().get(pk=request.user.pk)
+            if Address.objects.filter(user=user, is_deleted=False).count() >= Address.MAX_PER_USER:
+                raise ApiError("too_many_addresses", status.HTTP_400_BAD_REQUEST)
+            address = ser.save(user=user)
+            if make_home or user.home_address_id is None:
+                user.home_address = address
+                user.save(update_fields=["home_address"])
+        return Response(AddressSerializer(address).data, status=status.HTTP_201_CREATED)
 
 
 class AppConfigView(APIView):
