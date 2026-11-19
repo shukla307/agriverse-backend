@@ -11,8 +11,12 @@
 - Apps:
   - `core/`: settings and `errors.py`. Every error is `{"error": {"code", "fields"}}`; raise `ApiError("code", status)`.
   - `accounts/`: phone-first `User`, with no username or password for farmers. `firebase.py` verifies Firebase ID tokens with only the project ID, so no secret key file is needed. `phone.py` holds the `+91[6-9]` rule.
+  - `catalog/`: `JobCategory` (the 6 Home jobs + अन्य) and `MachineType` (power/implement, `search_aliases` as a
+    Postgres array, lower-cased on save, `default_hours_per_acre`). Seeded by migration `0002_seed_catalogue`
+    (glossary §7, decision §4, 05 §3.4a); JCB is inactive. Admin pages for both.
   - The old `api/` and `equipment/` apps (and the commented-out `core/firebase.py`) were **deleted on `v1`** (cleanup, 2026-11-19). They exist only on `master`.
-- Endpoints so far: `POST /api/auth/firebase/`, `POST /api/auth/token/refresh/`, `POST /api/auth/logout/`, `GET`/`PATCH /api/me/`, `GET`/`POST /api/me/addresses/`, `GET /api/app-config/`.
+- Endpoints so far: `POST /api/auth/firebase/`, `POST /api/auth/token/refresh/`, `POST /api/auth/logout/`, `GET`/`PATCH /api/me/`, `GET`/`POST /api/me/addresses/`, `GET /api/machine-types/` (ETag = fingerprint of the content, so any admin edit
+  changes it; `If-None-Match` → 304), `GET /api/app-config/`.
 - `Address` (घर/खेत/अन्य, India-only pin, village may be blank, max 20 per user). The first one, or `make_home`, becomes `User.home_address`. Login's `is_new_user` = no name **or** no home address.
 - `PATCH /api/me/` only accepts a `photo_url` pointing to `profiles/<firebase_uid>/avatar.jpg` in `FIREBASE_STORAGE_BUCKET` (default `<project>.firebasestorage.app`), so nobody can attach another person's photo. The full plan is in `~/agriverse/docs/06-api.md`.
 - JWT: access 30 min, refresh 365 days, rotating + blacklist. Default permission is `IsAuthenticated`; public views set `AllowAny` + `authentication_classes = []`. Throttles are in settings (`auth_firebase` 10/h).
