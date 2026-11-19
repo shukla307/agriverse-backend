@@ -1,9 +1,8 @@
-from urllib.parse import unquote, urlsplit
-
-from django.conf import settings
 from rest_framework import serializers
 
 from decimal import Decimal
+
+from core.storage import bucket_path
 
 from .models import Address, User
 
@@ -82,13 +81,7 @@ def is_own_profile_photo(url: str, firebase_uid: str | None) -> bool:
     """
     if not firebase_uid:
         return False
-    parts = urlsplit(url)
-    if parts.scheme != "https" or parts.netloc != "firebasestorage.googleapis.com":
-        return False
-    prefix = f"/v0/b/{settings.FIREBASE_STORAGE_BUCKET}/o/"
-    if not parts.path.startswith(prefix):
-        return False
-    return unquote(parts.path[len(prefix):]) == profile_photo_path(firebase_uid)
+    return bucket_path(url) == profile_photo_path(firebase_uid)
 
 
 class MeUpdateSerializer(serializers.Serializer):

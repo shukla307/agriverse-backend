@@ -14,8 +14,16 @@
   - `catalog/`: `JobCategory` (the 6 Home jobs + अन्य) and `MachineType` (power/implement, `search_aliases` as a
     Postgres array, lower-cased on save, `default_hours_per_acre`). Seeded by migration `0002_seed_catalogue`
     (glossary §7, decision §4, 05 §3.4a); JCB is inactive. Admin pages for both.
+  - `listings/`: `Listing` (one machine; place copied from an address or a map pin; no operator field,
+    `operator_included` = power machine), `ListingOption` (attachment + unit + price; inactive = removed, kept for
+    bookings), `Photo` (0–5, first = cover), `WeeklyHours` (sets `has_schedule`; bookable = active + schedule).
+    All rules in `serializers.py`. Admin: **"new machine types to add"** (proxy `NewTypeRequest`) + action
+    "Move to a real machine type" (`moving.py`). The machine type can't change after create (decision §18).
+  - `core/storage.py` `bucket_path(url)`: the one check for "is this link a file in OUR bucket?".
+    `core/pagination.py` `Pages`: 20 per page → `{count, next_page, results}`.
   - The old `api/` and `equipment/` apps (and the commented-out `core/firebase.py`) were **deleted on `v1`** (cleanup, 2026-11-19). They exist only on `master`.
-- Endpoints so far: `POST /api/auth/firebase/`, `POST /api/auth/token/refresh/`, `POST /api/auth/logout/`, `GET`/`PATCH /api/me/`, `GET`/`POST /api/me/addresses/`, `GET /api/machine-types/` (ETag = fingerprint of the content, so any admin edit
+- Endpoints so far: `POST /api/auth/firebase/`, `POST /api/auth/token/refresh/`, `POST /api/auth/logout/`, `GET`/`PATCH /api/me/`, `GET`/`POST /api/me/addresses/`, `POST /api/listings/`, `GET /api/listings/mine/`, `GET`/`PATCH`/`DELETE /api/listings/{id}/` (owner only until
+  Phase 4), `…/options/`, `…/photos/` (+ `order/`), `PUT …/weekly-hours/`, `GET /api/machine-types/` (ETag = fingerprint of the content, so any admin edit
   changes it; `If-None-Match` → 304), `GET /api/app-config/`.
 - `Address` (घर/खेत/अन्य, India-only pin, village may be blank, max 20 per user). The first one, or `make_home`, becomes `User.home_address`. Login's `is_new_user` = no name **or** no home address.
 - `PATCH /api/me/` only accepts a `photo_url` pointing to `profiles/<firebase_uid>/avatar.jpg` in `FIREBASE_STORAGE_BUCKET` (default `<project>.firebasestorage.app`), so nobody can attach another person's photo. The full plan is in `~/agriverse/docs/06-api.md`.

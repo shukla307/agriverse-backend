@@ -6,6 +6,8 @@ One error format for the whole API:
 The app turns `code` into a Hindi message. The server never sends display text.
 """
 
+from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
+from django.http import Http404
 from rest_framework import exceptions, status
 from rest_framework.views import exception_handler
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
@@ -33,9 +35,10 @@ def _code_for(exc) -> str:
         return "validation_error"
     if isinstance(exc, exceptions.Throttled):
         return "rate_limited"
-    if isinstance(exc, exceptions.NotFound):
+    # Django's own Http404 (get_object_or_404) is turned into a 404 by DRF, but keeps its own class.
+    if isinstance(exc, (exceptions.NotFound, Http404)):
         return "not_found"
-    if isinstance(exc, exceptions.PermissionDenied):
+    if isinstance(exc, (exceptions.PermissionDenied, DjangoPermissionDenied)):
         return "permission_denied"
     if isinstance(exc, exceptions.MethodNotAllowed):
         return "method_not_allowed"

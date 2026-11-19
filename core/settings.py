@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "accounts",
     "catalog",
+    "listings",
 ]
 
 MIDDLEWARE = [
@@ -132,6 +133,7 @@ REST_FRAMEWORK = {
         "user": "600/hour",
         "auth_firebase": "10/hour",
         "token_refresh": "60/hour",
+        "photos": "30/hour",
     },
 }
 

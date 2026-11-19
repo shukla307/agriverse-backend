@@ -1,0 +1,414 @@
+"""
+What the app may send and what it gets back (docs/06-api.md §5–§6).
+All the rules for "is this listing sensible?" live here, in one place.
+"""
+
+import datetime
+from decimal import Decimal
+
+from rest_framework import serializers
+
+from accounts.models import Address
+from catalog.models import MachineType
+from core.storage import bucket_path
+
+from .models import Listing, ListingOption, Photo, WeeklyHours
+
+OTHER = "other"
+
+
+def tidy(text: str) -> str:
+    """'  गन्ना   कटर ' → 'गन्ना कटर'"""
+    return " ".join((text or "").split())
+
+
+# --------------------------------------------------------------------- weekly hours
+
+
+class WeeklyHoursSerializer(serializers.Serializer):
+    weekday = serializers.IntegerField(min_value=0, max_value=6)
+    start_hour = serializers.IntegerField(min_value=0, max_value=23)
+    end_hour = serializers.IntegerField(min_value=1, max_value=24)
+
+    def validate(self, attrs):
+        if attrs["end_hour"] <= attrs["start_hour"]:
+            raise serializers.ValidationError({"end_hour": "must_be_after_start"})
+        return attrs
+
+
+def validate_week(days: list[dict]) -> list[dict]:
+    """At least one day, each weekday once."""
+    if not days:
+        raise serializers.ValidationError("at_least_one_day")
+    weekdays = [d["weekday"] for d in days]
+    if len(weekdays) != len(set(weekdays)):
+        raise serializers.ValidationError("weekday_twice")
+    return sorted(days, key=lambda d: d["weekday"])
+
+
+class WeekSerializer(serializers.Serializer):
+    """PUT /api/listings/{id}/weekly-hours/"""
+
+    days = WeeklyHoursSerializer(many=True)
+
+    def validate_days(self, days):
+        return validate_week(days)
+
+
+# --------------------------------------------------------------------- options
+
+
+class OptionWriteSerializer(serializers.Serializer):
+    """One way to book the machine. Context: "machine_type" (the listing's), "partial" for PATCH."""
+
+    implement_id = serializers.IntegerField(required=False, allow_null=True)
+    implement_other = serializers.CharField(max_length=60, required=False, allow_blank=True, trim_whitespace=True)
+    price_unit = serializers.ChoiceField(choices=ListingOption.Unit.choices)
+    price = serializers.DecimalField(
+        max_digits=9, decimal_places=2, required=False, allow_null=True,
+        min_value=Decimal("1"), max_value=Decimal("9999999"),
+    )
+    min_hours = serializers.IntegerField(required=False, min_value=1, max_value=24)
+    hours_per_acre = serializers.DecimalField(
+        max_digits=3, decimal_places=1, required=False, allow_null=True,
+        min_value=Decimal("0.1"), max_value=Decimal("20"),
+    )
+
+    def validate(self, attrs):
+        machine: MachineType = self.context["machine_type"]
+
+        # Attachment: none, a real implement, or अन्य + its name.
+        implement = None
+        implement_id = attrs.pop("implement_id", None)
+        if implement_id is not None:
+            implement = MachineType.objects.filter(pk=implement_id, is_active=True).first()
+            if implement is None or (implement.kind != MachineType.Kind.IMPLEMENT and implement.code != OTHER):
+                raise serializers.ValidationError({"implement_id": "not_an_implement"})
+            if machine.kind == MachineType.Kind.IMPLEMENT:
+                # An implement-only listing is the attachment itself: nothing more to attach.
+                raise serializers.ValidationError({"implement_id": "implement_only_listing"})
+        attrs["implement"] = implement
+        other_text = tidy(attrs.get("implement_other", ""))
+        if implement is not None and implement.code == OTHER:
+            if not other_text:
+                raise serializers.ValidationError({"implement_other": "required"})
+            attrs["implement_other"] = other_text
+        else:
+            attrs["implement_other"] = ""
+
+        unit = attrs["price_unit"]
+        if unit == ListingOption.Unit.NEGOTIABLE:
+            attrs["price"] = None
+        elif attrs.get("price") is None:
+            raise serializers.ValidationError({"price": "required"})
+
+        # Minimum hours only mean something for per-hour (and मोल-भाव) bookings.
+        if unit not in (ListingOption.Unit.HOUR, ListingOption.Unit.NEGOTIABLE):
+            attrs["min_hours"] = 1
+        else:
+            attrs.setdefault("min_hours", 1)
+
+        if unit == ListingOption.Unit.ACRE:
+            own = attrs.get("hours_per_acre")
+            default = (implement.default_hours_per_acre if implement else None) or machine.default_hours_per_acre
+            if own is None and default is None:
+                # e.g. tractor alone, trolley, अन्य: no starting value, so the owner must say (03 S14 step 4).
+                raise serializers.ValidationError({"hours_per_acre": "required"})
+            attrs["hours_per_acre"] = own
+        else:
+            if attrs.get("hours_per_acre") is not None:
+                raise serializers.ValidationError({"hours_per_acre": "only_for_acre"})
+            attrs["hours_per_acre"] = None
+        return attrs
+
+
+def option_key(o: dict | ListingOption) -> tuple:
+    """Two options are 'the same' if attachment + unit match (the database rule)."""
+    if isinstance(o, ListingOption):
+        return (o.implement_id, o.implement_other, o.price_unit)
+    return (o["implement"].pk if o["implement"] else None, o["implement_other"], o["price_unit"])
+
+
+class OptionReadSerializer(serializers.ModelSerializer):
+    implement = serializers.SerializerMethodField()
+    hours_per_acre = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ListingOption
+        fields = ("id", "implement", "implement_other", "price_unit", "price", "min_hours", "hours_per_acre")
+
+    def get_implement(self, o):
+        if o.implement is None:
+            return None
+        return {"id": o.implement.id, "code": o.implement.code, "name_hi": o.implement.name_hi}
+
+    def get_hours_per_acre(self, o):
+        if o.price_unit != ListingOption.Unit.ACRE:
+            return None
+        value = o.effective_hours_per_acre()
+        return str(value) if value is not None else None
+
+
+# --------------------------------------------------------------------- photos
+
+
+def listing_folder(firebase_uid: str) -> str:
+    """Same folder as firebase/storage.rules: listings/{uid}/{draft or listing id}/…"""
+    return f"listings/{firebase_uid}/"
+
+
+class PhotoWriteSerializer(serializers.Serializer):
+    """
+    The phone uploaded two files to Firebase Storage itself; here it tells us where they are.
+    Only files in the caller's own folder, in our bucket, as a matching _full / _thumb pair.
+    """
+
+    url = serializers.URLField(max_length=600)
+    thumb_url = serializers.URLField(max_length=600)
+    storage_path = serializers.CharField(max_length=300)
+
+    def validate(self, attrs):
+        uid = self.context["firebase_uid"]
+        path = attrs["storage_path"]
+        if not uid or not path.startswith(listing_folder(uid)) or not path.endswith("_full.jpg"):
+            raise serializers.ValidationError({"storage_path": "not_own_photo"})
+        if ".." in path.split("/") or path.count("/") != 3:
+            raise serializers.ValidationError({"storage_path": "not_own_photo"})
+        if bucket_path(attrs["url"]) != path:
+            raise serializers.ValidationError({"url": "not_own_photo"})
+        if bucket_path(attrs["thumb_url"]) != path.removesuffix("_full.jpg") + "_thumb.jpg":
+            raise serializers.ValidationError({"thumb_url": "not_own_photo"})
+        return attrs
+
+
+class PhotoReadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Photo
+        fields = ("id", "url", "thumb_url", "storage_path", "sort_order")
+
+
+class PhotoOrderSerializer(serializers.Serializer):
+    photo_ids = serializers.ListField(child=serializers.IntegerField(), max_length=Listing.MAX_PHOTOS)
+
+
+# --------------------------------------------------------------------- location
+
+
+class LocationSerializer(serializers.Serializer):
+    """A pin picked on the map (S5) instead of a saved address."""
+
+    lat = serializers.DecimalField(
+        max_digits=9, decimal_places=6, min_value=Decimal(Address.LAT_MIN), max_value=Decimal(Address.LAT_MAX)
+    )
+    lng = serializers.DecimalField(
+        max_digits=9, decimal_places=6, min_value=Decimal(Address.LNG_MIN), max_value=Decimal(Address.LNG_MAX)
+    )
+    village = serializers.CharField(max_length=120, required=False, allow_blank=True)
+    district = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    state = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    landmark = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            data = {**data, **{f: round(float(data[f]), 6) for f in ("lat", "lng") if isinstance(data.get(f), (int, float))}}
+        return super().to_internal_value(data)
+
+
+def place_fields(*, user, address_id=None, location=None) -> dict:
+    """The listing's own copy of a place: from one of my saved addresses, or a map pin."""
+    if location is not None:
+        return {
+            "lat": location["lat"], "lng": location["lng"],
+            **{f: tidy(location.get(f, "")) for f in ("village", "district", "state", "landmark")},
+        }
+    addr = None
+    if address_id is not None:
+        addr = Address.objects.filter(pk=address_id, user=user, is_deleted=False).first()
+        if addr is None:
+            raise serializers.ValidationError({"address_id": "not_found"})
+    else:
+        addr = user.home_address
+        if addr is None or addr.is_deleted:
+            raise serializers.ValidationError({"location": "required"})
+    return {f: getattr(addr, f) for f in ("lat", "lng", "village", "district", "state", "landmark")}
+
+
+# --------------------------------------------------------------------- listing
+
+
+def max_year() -> int:
+    return datetime.date.today().year + 1
+
+
+class ListingFieldsSerializer(serializers.Serializer):
+    """Fields shared by create and PATCH. Everything optional here; create adds what's required."""
+
+    machine_type_other = serializers.CharField(max_length=60, required=False, allow_blank=True)
+    brand = serializers.CharField(max_length=60, required=False, allow_blank=True)
+    model = serializers.CharField(max_length=60, required=False, allow_blank=True)
+    hp = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=200)
+    year = serializers.IntegerField(required=False, allow_null=True, min_value=1960)
+    min_tractor_hp = serializers.IntegerField(required=False, allow_null=True, min_value=10, max_value=200)
+    description = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    address_id = serializers.IntegerField(required=False, allow_null=True)
+    location = LocationSerializer(required=False, allow_null=True)
+    diesel_included = serializers.BooleanField(required=False)
+    transport_included = serializers.BooleanField(required=False)
+    gap_hours = serializers.ChoiceField(choices=[0, 1, 2], required=False)
+
+    def validate_year(self, value):
+        if value is not None and value > max_year():
+            raise serializers.ValidationError("in_future")
+        return value
+
+    def clean_common(self, attrs, machine: MachineType):
+        for f in ("machine_type_other", "brand", "model", "description"):
+            if f in attrs:
+                attrs[f] = tidy(attrs[f])
+        if machine.code == OTHER:
+            if "machine_type_other" in attrs and not attrs["machine_type_other"]:
+                raise serializers.ValidationError({"machine_type_other": "required"})
+        else:
+            attrs["machine_type_other"] = ""
+        if machine.kind != MachineType.Kind.IMPLEMENT:
+            attrs.pop("min_tractor_hp", None)
+        return attrs
+
+
+class ListingCreateSerializer(ListingFieldsSerializer):
+    """POST /api/listings/: the listing, its options, and optionally photos and weekly hours, in one call."""
+
+    machine_type_id = serializers.IntegerField()
+    options = serializers.ListField(child=serializers.DictField(), min_length=1, max_length=ListingOption.MAX_PER_LISTING)
+    photos = PhotoWriteSerializer(many=True, required=False)
+    weekly_hours = WeeklyHoursSerializer(many=True, required=False)
+
+    def validate(self, attrs):
+        machine = MachineType.objects.filter(pk=attrs.pop("machine_type_id"), is_active=True).first()
+        if machine is None:
+            raise serializers.ValidationError({"machine_type_id": "not_found"})
+        attrs["machine_type"] = machine
+        if machine.code == OTHER and not tidy(attrs.get("machine_type_other", "")):
+            raise serializers.ValidationError({"machine_type_other": "required"})
+        attrs = self.clean_common(attrs, machine)
+
+        attrs.update(place_fields(
+            user=self.context["user"], address_id=attrs.pop("address_id", None), location=attrs.pop("location", None)
+        ))
+
+        # Options are checked against THIS listing's machine, so they're validated here, not as a nested field.
+        options, errors = [], {}
+        for i, raw in enumerate(attrs.pop("options")):
+            ser = OptionWriteSerializer(data=raw, context={"machine_type": machine})
+            if ser.is_valid():
+                options.append(ser.validated_data)
+            else:
+                errors[str(i)] = ser.errors
+        if errors:
+            raise serializers.ValidationError({"options": errors})
+        keys = [option_key(o) for o in options]
+        if len(keys) != len(set(keys)):
+            raise serializers.ValidationError({"options": "duplicate_option"})
+        attrs["options"] = options
+
+        if len(attrs.get("photos", [])) > Listing.MAX_PHOTOS:
+            raise serializers.ValidationError({"photos": "too_many_photos"})
+        if attrs.get("weekly_hours"):
+            attrs["weekly_hours"] = validate_week(attrs["weekly_hours"])
+        else:
+            attrs["weekly_hours"] = []
+        return attrs
+
+
+class ListingUpdateSerializer(ListingFieldsSerializer):
+    """PATCH /api/listings/{id}/. The machine type can't change: it would be a different machine."""
+
+    status = serializers.ChoiceField(choices=[Listing.Status.ACTIVE, Listing.Status.PAUSED], required=False)
+
+    def validate(self, attrs):
+        listing: Listing = self.context["listing"]
+        attrs = self.clean_common(attrs, listing.machine_type)
+        if listing.machine_type.code != OTHER:
+            attrs.pop("machine_type_other", None)
+        address_id, location = attrs.pop("address_id", None), attrs.pop("location", None)
+        if address_id is not None or location is not None:
+            attrs.update(place_fields(user=self.context["user"], address_id=address_id, location=location))
+        return attrs
+
+
+def machine_json(m: MachineType) -> dict:
+    return {"id": m.id, "code": m.code, "name_hi": m.name_hi, "kind": m.kind, "icon": m.icon}
+
+
+class ListingOwnerSerializer(serializers.ModelSerializer):
+    """The full listing, as its owner sees it (after create, in S21 edit)."""
+
+    machine = serializers.SerializerMethodField()
+    location = serializers.SerializerMethodField()
+    options = serializers.SerializerMethodField()
+    photos = PhotoReadSerializer(many=True, read_only=True)
+    weekly_hours = serializers.SerializerMethodField()
+    operator_included = serializers.BooleanField(read_only=True)
+    bookable = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = Listing
+        fields = (
+            "id", "machine", "machine_type_other", "brand", "model", "hp", "year", "min_tractor_hp", "description",
+            "location", "diesel_included", "transport_included", "gap_hours", "operator_included",
+            "has_schedule", "bookable", "status", "bookings_count", "options", "photos", "weekly_hours", "created_at",
+        )
+
+    def get_machine(self, obj):
+        return machine_json(obj.machine_type)
+
+    def get_location(self, obj):
+        return {
+            "lat": float(obj.lat), "lng": float(obj.lng), "village": obj.village, "district": obj.district,
+            "state": obj.state, "landmark": obj.landmark,
+        }
+
+    def get_options(self, obj):
+        active = [o for o in obj.options.all() if o.is_active]
+        return OptionReadSerializer(active, many=True).data
+
+    def get_weekly_hours(self, obj):
+        return [
+            {"weekday": w.weekday, "start_hour": w.start_hour, "end_hour": w.end_hour} for w in obj.weekly_hours.all()
+        ]
+
+
+class ListingMineSerializer(serializers.ModelSerializer):
+    """A card in S16 My Machines."""
+
+    machine = serializers.SerializerMethodField()
+    cover_thumb_url = serializers.SerializerMethodField()
+    options_count = serializers.SerializerMethodField()
+    bookable = serializers.BooleanField(read_only=True)
+    # Filled in by bookings (Phase 5); always there so the app's cards don't change shape later.
+    next_booking = serializers.SerializerMethodField()
+    pending_requests_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Listing
+        fields = (
+            "id", "machine", "machine_type_other", "brand", "model", "village", "status", "has_schedule",
+            "bookable", "cover_thumb_url", "options_count", "bookings_count", "next_booking",
+            "pending_requests_count",
+        )
+
+    def get_machine(self, obj):
+        return machine_json(obj.machine_type)
+
+    def get_cover_thumb_url(self, obj):
+        photos = list(obj.photos.all())
+        return photos[0].thumb_url if photos else None
+
+    def get_options_count(self, obj):
+        return sum(1 for o in obj.options.all() if o.is_active)
+
+    def get_next_booking(self, obj):
+        return None
+
+    def get_pending_requests_count(self, obj):
+        return 0
