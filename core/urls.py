@@ -11,5 +11,4 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("", home),
     path("api/", include("accounts.urls")),
-    # Old endpoints (api/, api/equipment/) are switched off on the v1 branch.
 ]

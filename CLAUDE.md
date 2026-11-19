@@ -6,12 +6,12 @@
 
 ## v1 (new backend)
 
-- **Python 3.11** venv at `./venv` (the old 3.9 venv was renamed `venv-old-py39/`, safe to delete).
+- **Python 3.11** venv at `./venv`.
 - **PostgreSQL only**, also locally: Homebrew `postgresql@14`, database `agriverse_dev`. The `.env` has `DATABASE_URL=postgres:///agriverse_dev` and `DEBUG=True`. SQLite is not supported; the settings refuse to start without `DATABASE_URL`.
 - Apps:
   - `core/`: settings and `errors.py`. Every error is `{"error": {"code", "fields"}}`; raise `ApiError("code", status)`.
   - `accounts/`: phone-first `User`, with no username or password for farmers. `firebase.py` verifies Firebase ID tokens with only the project ID, so no secret key file is needed. `phone.py` holds the `+91[6-9]` rule.
-  - The old `api/` and `equipment/` folders are **switched off** (not in `INSTALLED_APPS` or urls) and will be deleted in the cleanup step.
+  - The old `api/` and `equipment/` apps (and the commented-out `core/firebase.py`) were **deleted on `v1`** (cleanup, 2026-11-19). They exist only on `master`.
 - Endpoints so far: `POST /api/auth/firebase/`, `POST /api/auth/token/refresh/`, `POST /api/auth/logout/`, `GET`/`PATCH /api/me/`, `GET`/`POST /api/me/addresses/`, `GET /api/app-config/`.
 - `Address` (घर/खेत/अन्य, India-only pin, village may be blank, max 20 per user). The first one, or `make_home`, becomes `User.home_address`. Login's `is_new_user` = no name **or** no home address.
 - `PATCH /api/me/` only accepts a `photo_url` pointing to `profiles/<firebase_uid>/avatar.jpg` in `FIREBASE_STORAGE_BUCKET` (default `<project>.firebasestorage.app`), so nobody can attach another person's photo. The full plan is in `~/agriverse/docs/06-api.md`.

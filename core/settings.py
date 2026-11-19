@@ -50,8 +50,6 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "accounts",
-    # The old "api" and "equipment" apps are switched off on the v1 branch:
-    # Django can't have two user models. Their files are removed in the cleanup step.
 ]
 
 MIDDLEWARE = [
