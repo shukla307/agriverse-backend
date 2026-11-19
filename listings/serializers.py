@@ -9,10 +9,11 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from accounts.models import Address
-from catalog.models import MachineType
+from catalog.models import JobCategory, MachineType
 from core.storage import bucket_path
 
 from .models import Listing, ListingOption, Photo, WeeklyHours
+from .search import from_price, matched_implement
 
 OTHER = "other"
 
@@ -412,3 +413,78 @@ class ListingMineSerializer(serializers.ModelSerializer):
 
     def get_pending_requests_count(self, obj):
         return 0
+
+
+# ---- Search (renter side, docs/06-api.md §7) ----
+
+class SearchParamsSerializer(serializers.Serializer):
+    """Query string of GET /api/search/. Unknown job/machine codes are a 400, not an empty list,
+    so an app bug shows up instead of looking like 'no machines nearby'."""
+
+    lat = serializers.FloatField(min_value=-90, max_value=90)
+    lng = serializers.FloatField(min_value=-180, max_value=180)
+    radius_km = serializers.FloatField(min_value=0.5, max_value=100, default=10)
+    job = serializers.SlugField(required=False)
+    machine = serializers.SlugField(required=False)
+    unit = serializers.ChoiceField(choices=ListingOption.Unit.values, required=False)
+    hp_min = serializers.IntegerField(min_value=0, max_value=500, required=False)
+    hp_max = serializers.IntegerField(min_value=0, max_value=500, required=False)
+
+    def validate_job(self, code):
+        if not JobCategory.objects.filter(code=code, is_active=True).exists():
+            raise serializers.ValidationError("unknown")
+        return code
+
+    def validate_machine(self, code):
+        if not MachineType.objects.filter(code=code).exists():
+            raise serializers.ValidationError("unknown")
+        return code
+
+    def validate(self, attrs):
+        if attrs.get("hp_min") is not None and attrs.get("hp_max") is not None and attrs["hp_min"] > attrs["hp_max"]:
+            raise serializers.ValidationError({"hp_max": "below_hp_min"})
+        return attrs
+
+
+class SearchResultSerializer(serializers.ModelSerializer):
+    """One search card. Privacy (06 §7): no phone, no landmark, no exact lat/lng, owner's first name only."""
+
+    machine = serializers.SerializerMethodField()
+    matched_implement = serializers.SerializerMethodField()
+    from_price = serializers.SerializerMethodField()
+    operator_included = serializers.BooleanField(read_only=True)
+    bookable = serializers.BooleanField(read_only=True)
+    distance_km = serializers.SerializerMethodField()
+    thumb_url = serializers.SerializerMethodField()
+    owner = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Listing
+        fields = (
+            "id", "machine", "machine_type_other", "brand", "model", "hp", "matched_implement", "from_price",
+            "operator_included", "transport_included", "bookable", "village", "distance_km", "thumb_url", "owner",
+        )
+
+    @property
+    def params(self):
+        return self.context["params"]
+
+    def get_machine(self, obj):
+        return machine_json(obj.machine_type)
+
+    def get_matched_implement(self, obj):
+        m = matched_implement(obj, self.params)
+        return {"code": m.code, "name_hi": m.name_hi, "icon": m.icon} if m else None
+
+    def get_from_price(self, obj):
+        return from_price(obj, self.params)
+
+    def get_distance_km(self, obj):
+        return round(obj.distance_km, 1)
+
+    def get_thumb_url(self, obj):
+        return obj.ordered_photos[0].thumb_url if obj.ordered_photos else None
+
+    def get_owner(self, obj):
+        first = (obj.owner.name or "").split()
+        return {"first_name": first[0] if first else ""}

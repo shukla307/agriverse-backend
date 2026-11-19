@@ -23,7 +23,7 @@
     `core/pagination.py` `Pages`: 20 per page → `{count, next_page, results}`.
   - The old `api/` and `equipment/` apps (and the commented-out `core/firebase.py`) were **deleted on `v1`** (cleanup, 2026-11-19). They exist only on `master`.
 - Endpoints so far: `POST /api/auth/firebase/`, `POST /api/auth/token/refresh/`, `POST /api/auth/logout/`, `GET`/`PATCH /api/me/`, `GET`/`POST /api/me/addresses/`, `POST /api/listings/`, `GET /api/listings/mine/`, `GET`/`PATCH`/`DELETE /api/listings/{id}/` (owner only until
-  Phase 4), `…/options/`, `…/photos/` (+ `order/`), `PUT …/weekly-hours/`, `GET /api/machine-types/` (ETag = fingerprint of the content, so any admin edit
+  Phase 4), `…/options/`, `…/photos/` (+ `order/`), `PUT …/weekly-hours/`, `GET /api/search/` (renters: radius, job/machine/unit/HP, nearest first; `listings/search.py`), `GET /api/machine-types/` (ETag = fingerprint of the content, so any admin edit
   changes it; `If-None-Match` → 304), `GET /api/app-config/`.
 - `Address` (घर/खेत/अन्य, India-only pin, village may be blank, max 20 per user). The first one, or `make_home`, becomes `User.home_address`. Login's `is_new_user` = no name **or** no home address.
 - `PATCH /api/me/` only accepts a `photo_url` pointing to `profiles/<firebase_uid>/avatar.jpg` in `FIREBASE_STORAGE_BUCKET` (default `<project>.firebasestorage.app`), so nobody can attach another person's photo. The full plan is in `~/agriverse/docs/06-api.md`.
@@ -37,6 +37,9 @@ python manage.py runserver 0.0.0.0:8000      # emulator reaches it at http://10.
 python -m pytest                             # Firebase is faked; uses a throwaway test_agriverse_dev DB
 ```
 
+- **Speed check data:** `python manage.py seed_listings --count 1000` puts fake listings around Prayagraj into the
+  dev DB (DEBUG only); `seed_listings --delete` removes exactly those. Run `ANALYZE` after seeding, or Postgres
+  plans with stale row counts.
 - **Django admin** (`/admin/`, incl. "new machine types to add"): create your own login once with
   `python manage.py createsuperuser` (phone like +919XXXXXXXXX + a strong password; Claude never sets it).
 - `requirements.txt` is a full pin list generated from the venv (minus dev tools). After adding a package, regenerate it the same way and check with `pip install --dry-run --ignore-installed -r requirements.txt`.

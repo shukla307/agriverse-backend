@@ -1,7 +1,7 @@
 """
 Owner-side listing endpoints (docs/06-api.md §5) and the weekly schedule (§6).
 Someone else's listing always answers 404, so ids can't be probed (06 §1).
-The public details and search come in Phase 4.
+Search for renters is SearchView (GET /api/search/, listings/search.py). Public details: Phase 4 slice 3.
 """
 
 from django.db import transaction
@@ -15,6 +15,7 @@ from core.errors import ApiError
 from core.pagination import Pages
 
 from .models import Listing, ListingOption, Photo, WeeklyHours
+from .search import SearchParams, search_queryset
 from .serializers import (
     ListingCreateSerializer,
     ListingMineSerializer,
@@ -25,6 +26,8 @@ from .serializers import (
     PhotoOrderSerializer,
     PhotoReadSerializer,
     PhotoWriteSerializer,
+    SearchParamsSerializer,
+    SearchResultSerializer,
     WeekSerializer,
     option_key,
 )
@@ -251,3 +254,20 @@ class WeeklyHoursView(APIView):
         days = [{"weekday": w.weekday, "start_hour": w.start_hour, "end_hour": w.end_hour}
                 for w in listing.weekly_hours.all()]
         return Response({"has_schedule": True, "days": days})
+
+
+class SearchView(APIView):
+    """GET /api/search/?lat&lng[&radius_km&job&machine&unit&hp_min&hp_max&page]: machines inside the radius,
+    nearest first, 20 per page. count == 0 → hint "none_in_radius" so the app offers a bigger radius."""
+
+    def get(self, request):
+        ser = SearchParamsSerializer(data=request.query_params)
+        ser.is_valid(raise_exception=True)
+        params = SearchParams(**ser.validated_data)
+        pages = Pages()
+        page = pages.paginate_queryset(search_queryset(params, exclude_owner=request.user), request, view=self)
+        response = pages.get_paginated_response(
+            SearchResultSerializer(page, many=True, context={"params": params}).data
+        )
+        response.data["hint"] = "none_in_radius" if response.data["count"] == 0 else None
+        return response
