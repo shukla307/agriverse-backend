@@ -15,7 +15,7 @@ from core.errors import ApiError
 from core.pagination import Pages
 
 from .models import Listing, ListingOption, Photo, WeeklyHours
-from .search import SearchParams, search_queryset
+from .search import SearchParams, exists_anywhere, resolve, search_queryset
 from .serializers import (
     ListingCreateSerializer,
     ListingMineSerializer,
@@ -257,17 +257,22 @@ class WeeklyHoursView(APIView):
 
 
 class SearchView(APIView):
-    """GET /api/search/?lat&lng[&radius_km&job&machine&unit&hp_min&hp_max&page]: machines inside the radius,
-    nearest first, 20 per page. count == 0 → hint "none_in_radius" so the app offers a bigger radius."""
+    """GET /api/search/?lat&lng[&radius_km&job&machine&q&unit&hp_min&hp_max&page]: machines inside the radius,
+    nearest first, 20 per page. count == 0 → hint "none_in_radius" or "no_match"."""
 
     def get(self, request):
         ser = SearchParamsSerializer(data=request.query_params)
         ser.is_valid(raise_exception=True)
-        params = SearchParams(**ser.validated_data)
+        params = resolve(SearchParams(**ser.validated_data))
         pages = Pages()
         page = pages.paginate_queryset(search_queryset(params, exclude_owner=request.user), request, view=self)
         response = pages.get_paginated_response(
             SearchResultSerializer(page, many=True, context={"params": params}).data
         )
-        response.data["hint"] = "none_in_radius" if response.data["count"] == 0 else None
+        response.data["hint"] = None
+        if response.data["count"] == 0:
+            # "none_in_radius": such machines exist, just farther away → the app offers a bigger circle.
+            # "no_match": nothing like this anywhere (e.g. nonsense typed) → a bigger circle wouldn't help.
+            found_farther = exists_anywhere(params, exclude_owner=request.user)
+            response.data["hint"] = "none_in_radius" if found_farther else "no_match"
         return response

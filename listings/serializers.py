@@ -426,6 +426,7 @@ class SearchParamsSerializer(serializers.Serializer):
     radius_km = serializers.FloatField(min_value=0.5, max_value=100, default=10)
     job = serializers.SlugField(required=False)
     machine = serializers.SlugField(required=False)
+    q = serializers.CharField(max_length=100, required=False, allow_blank=True, trim_whitespace=True)
     unit = serializers.ChoiceField(choices=ListingOption.Unit.values, required=False)
     hp_min = serializers.IntegerField(min_value=0, max_value=500, required=False)
     hp_max = serializers.IntegerField(min_value=0, max_value=500, required=False)

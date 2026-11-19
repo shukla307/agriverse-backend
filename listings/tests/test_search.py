@@ -319,3 +319,95 @@ def test_distance_within_1_percent_of_the_map_ellipsoid(renter, owner):
         listing = Listing.objects.get(pk=card["id"])
         true_km = vincenty_km(JUNCTION, (float(listing.lat), float(listing.lng)))
         assert abs(card["distance_km"] - true_km) / true_km < 0.01, (card["distance_km"], true_km)
+
+
+# ---- q: any spelling (slice 2) ----
+
+@pytest.fixture
+def village(owner):
+    """Machines at Jhunsi, as different owners would type them."""
+    return {
+        "mahindra_tractor": make(owner, JHUSI, brand="Mahindra", model="575 DI", hp=45),
+        "swaraj_tractor": make(owner, JHUSI, brand="Swaraj", hp=50,
+                               options=[("", "hour", "600"), ("rotavator", "acre", "1500")]),
+        "rotavator": make(owner, JHUSI, machine="rotavator", options=[("", "hour", "900")]),
+        "sugarcane": make(owner, JHUSI, machine="other", machine_type_other="गन्ना हार्वेस्टर"),
+        "drone": make(owner, JHUSI, machine="drone_sprayer", options=[("", "acre", "400")]),
+    }
+
+
+@pytest.mark.parametrize("q", ["rotaveter", "ROTAVATOR", "रोटावेटर", "मुझे रोटावेटर चाहिए"])
+def test_q_any_spelling_finds_machines_and_attachments(renter, village, q):
+    body = search(renter, q=q)
+    assert set(ids(body)) == {village["rotavator"].id, village["swaraj_tractor"].id}
+    by_id = {r["id"]: r for r in body["results"]}
+    assert by_id[village["swaraj_tractor"].id]["matched_implement"]["code"] == "rotavator"
+    assert by_id[village["swaraj_tractor"].id]["from_price"] == {"unit": "acre", "price": "1500.00"}
+
+
+@pytest.mark.parametrize("q", ["tracter", "ट्रेक्टर", "TRACTOR"])
+def test_q_tractor_spellings(renter, village, q):
+    assert set(ids(search(renter, q=q))) == {village["mahindra_tractor"].id, village["swaraj_tractor"].id}
+
+
+def test_q_brand_even_misspelt(renter, village):
+    assert ids(search(renter, q="mahindra")) == [village["mahindra_tractor"].id]
+    for misspelt in ("mahendra", "mhindra", "mahindar"):  # not pieces of "Mahindra": only pg_trgm finds these
+        assert ids(search(renter, q=misspelt)) == [village["mahindra_tractor"].id], misspelt
+    assert ids(search(renter, q="sonalka")) == []  # nobody here has a Sonalika
+    assert ids(search(renter, q="575")) == [village["mahindra_tractor"].id]  # model
+
+
+def test_q_extra_words_narrow_only_when_something_matches(renter, village):
+    assert ids(search(renter, q="swaraj tractor")) == [village["swaraj_tractor"].id]
+    # "jaldi" matches nothing: ignored, the tractors still come.
+    assert set(ids(search(renter, q="jaldi tractor"))) == {village["mahindra_tractor"].id,
+                                                            village["swaraj_tractor"].id}
+
+
+def test_q_finds_names_typed_under_other(renter, owner, village):
+    assert ids(search(renter, q="गन्ना")) == [village["sugarcane"].id]
+    assert ids(search(renter, q="गन्ना हारवेस्टर")) == [village["sugarcane"].id]  # misspelt, pg_trgm
+    puddler = make(owner, JHUSI, options=[("", "hour", "600")])
+    ListingOption.objects.create(listing=puddler, implement=mt("other"), implement_other="पडलर",
+                                 price_unit="hour", price=Decimal("800"))
+    assert ids(search(renter, q="पडलर")) == [puddler.id]
+
+
+def test_q_nonsense_finds_nothing_and_says_so(renter, village):
+    for q in ("xyzqw", "क्षज्ञ", "मुझे चाहिए"):
+        body = search(renter, q=q)
+        assert body["count"] == 0 and body["hint"] == "no_match", q
+
+
+def test_q_far_away_says_widen(renter, owner):
+    make(owner, PHAPHAMAU, machine="rotavator")  # ~10.4 km
+    assert search(renter, q="rotavator", radius_km=5)["hint"] == "none_in_radius"
+    assert search(renter, machine="rotavator", radius_km=5)["hint"] == "none_in_radius"
+    assert search(renter, machine="thresher", radius_km=5)["hint"] == "no_match"  # none anywhere
+
+
+def test_q_with_job_must_match_both(renter, owner, village):
+    seeder = make(owner, JHUSI, options=[("", "hour", "600"), ("seed_drill", "acre", "900")])
+    # "tractor" + job sowing: only the tractor that has a sowing attachment.
+    assert ids(search(renter, q="tractor", job="sowing")) == [seeder.id]
+
+
+def test_q_job_name_means_its_machines(renter, village):
+    assert ids(search(renter, q="छिड़काव")) == [village["drone"].id]
+
+
+def test_q_query_count_stays_constant(renter, owner):
+    def count_queries():
+        with CaptureQueriesContext(connection) as ctx:
+            search(renter, q="swaraj rotavator")
+        return len(ctx)
+
+    def add(n):
+        for _ in range(n):
+            make(owner, JHUSI, brand="Swaraj", options=[("", "hour", "600"), ("rotavator", "acre", "1500")])
+
+    add(3)
+    few = count_queries()
+    add(17)
+    assert count_queries() == few

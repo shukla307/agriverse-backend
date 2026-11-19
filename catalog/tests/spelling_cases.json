@@ -1,0 +1,33 @@
+{
+  "_about": "What a farmer types or says → the machine codes it must mean. Used by the server (catalog/tests/test_matching.py) and, copied, by the app's offline suggestions (Phase 4 slice 5). Keep both copies the same.",
+  "finds": [
+    ["TRACTOR", ["tractor", "mini_tractor"]],
+    ["tracter", ["tractor"]],
+    ["ट्रेक्टर", ["tractor"]],
+    ["ट्रैक्टर", ["tractor", "mini_tractor"]],
+    ["ट्रैकटर", ["tractor"]],
+    ["  Tractor!! ", ["tractor", "mini_tractor"]],
+    ["mini tractor", ["mini_tractor"]],
+    ["chota tractor", ["mini_tractor"]],
+    ["rotaveter", ["rotavator"]],
+    ["rotavtor", ["rotavator"]],
+    ["रोटावेटर", ["rotavator"]],
+    ["dhan ropai", ["paddy_transplanter"]],
+    ["dhan ropae", ["paddy_transplanter"]],
+    ["kultivator", ["cultivator"]],
+    ["harvestar", ["combine_harvester"]],
+    ["थ्रेसर", ["thresher"]],
+    ["हल", ["plough_mb", "plough_disc"]],
+    ["आलू", ["potato_planter", "potato_digger"]],
+    ["लेजर लेवलर", ["laser_leveller"]],
+    ["मुझे रोटावेटर चाहिए", ["rotavator"]],
+    ["tractor kiraye par chahiye", ["tractor", "mini_tractor"]],
+    ["ड्रोन", ["drone_sprayer"]],
+    ["रोटाव", ["rotavator"]]
+  ],
+  "job_names": [
+    ["जुताई", "land_prep"],
+    ["कटाई", "harvesting"]
+  ],
+  "finds_nothing": ["xyzqw", "asdfgh", "क्षज्ञ", "मुझे चाहिए", "", "!!"]
+}
