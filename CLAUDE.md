@@ -37,6 +37,8 @@ python manage.py runserver 0.0.0.0:8000      # emulator reaches it at http://10.
 python -m pytest                             # Firebase is faked; uses a throwaway test_agriverse_dev DB
 ```
 
+- **Django admin** (`/admin/`, incl. "new machine types to add"): create your own login once with
+  `python manage.py createsuperuser` (phone like +919XXXXXXXXX + a strong password; Claude never sets it).
 - `requirements.txt` is a full pin list generated from the venv (minus dev tools). After adding a package, regenerate it the same way and check with `pip install --dry-run --ignore-installed -r requirements.txt`.
 - `.claude/settings.json` blocks reading **and writing** any `.env*` file, including `.env.example`. Ask the owner to edit those.
 
