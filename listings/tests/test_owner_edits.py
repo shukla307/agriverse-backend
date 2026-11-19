@@ -54,8 +54,9 @@ def test_mine_query_count_does_not_grow(me):
     assert len(big.captured_queries) == len(small.captured_queries)
 
 
-@pytest.mark.parametrize("method", ["get", "patch", "delete"])
+@pytest.mark.parametrize("method", ["patch", "delete"])
 def test_someone_elses_listing_is_404(api, stranger, listing_id, method):
+    """Changing someone else's listing: 404. (Reading it is the renter view since Phase 4: test_details.py.)"""
     api.force_authenticate(stranger)
     res = getattr(api, method)(f"/api/listings/{listing_id}/", {"status": "paused"}, format="json")
     assert res.status_code == 404

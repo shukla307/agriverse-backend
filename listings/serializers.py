@@ -13,7 +13,7 @@ from catalog.models import JobCategory, MachineType
 from core.storage import bucket_path
 
 from .models import Listing, ListingOption, Photo, WeeklyHours
-from .search import from_price, matched_implement
+from .search import from_price, haversine_km, matched_implement
 
 OTHER = "other"
 
@@ -489,3 +489,67 @@ class SearchResultSerializer(serializers.ModelSerializer):
     def get_owner(self, obj):
         first = (obj.owner.name or "").split()
         return {"first_name": first[0] if first else ""}
+
+
+# ---- Details for renters (docs/06-api.md §7) ----
+
+class ListingPublicSerializer(serializers.ModelSerializer):
+    """S10 details for anyone who isn't the owner. Privacy (06 §7): no phone, landmark, exact lat/lng,
+    district/state, storage paths or owner id; the owner's first name, village and month joined only."""
+
+    machine = serializers.SerializerMethodField()
+    photos = serializers.SerializerMethodField()
+    options = serializers.SerializerMethodField()
+    weekly_hours = serializers.SerializerMethodField()
+    operator_included = serializers.BooleanField(read_only=True)
+    bookable = serializers.BooleanField(read_only=True)
+    distance_km = serializers.SerializerMethodField()
+    owner = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Listing
+        fields = (
+            "id", "machine", "machine_type_other", "brand", "model", "hp", "year", "min_tractor_hp", "description",
+            "photos", "options", "operator_included", "diesel_included", "transport_included", "gap_hours",
+            "bookable", "weekly_hours", "village", "distance_km", "owner", "status",
+        )
+
+    def get_machine(self, obj):
+        return machine_json(obj.machine_type)
+
+    def get_photos(self, obj):
+        return [{"url": p.url, "thumb_url": p.thumb_url} for p in obj.photos.all()]
+
+    def get_options(self, obj):
+        return OptionReadSerializer([o for o in obj.options.all() if o.is_active], many=True).data
+
+    def get_weekly_hours(self, obj):
+        return [
+            {"weekday": w.weekday, "start_hour": w.start_hour, "end_hour": w.end_hour} for w in obj.weekly_hours.all()
+        ]
+
+    def get_distance_km(self, obj):
+        point = self.context.get("from_point")
+        return round(haversine_km(point, (float(obj.lat), float(obj.lng))), 1) if point else None
+
+    def get_owner(self, obj):
+        user = obj.owner
+        words = (user.name or "").split()
+        home = user.home_address
+        return {
+            "first_name": words[0] if words else "",
+            "village": home.village if home else "",
+            "member_since": user.date_joined.strftime("%Y-%m"),
+        }
+
+
+class FromPointSerializer(serializers.Serializer):
+    """Optional ?lat&lng on the details: both or neither."""
+
+    lat = serializers.FloatField(min_value=-90, max_value=90, required=False)
+    lng = serializers.FloatField(min_value=-180, max_value=180, required=False)
+
+    def validate(self, attrs):
+        if ("lat" in attrs) != ("lng" in attrs):
+            raise serializers.ValidationError({"lng" if "lat" in attrs else "lat": "required"})
+        return attrs

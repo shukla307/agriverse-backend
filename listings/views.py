@@ -17,9 +17,11 @@ from core.pagination import Pages
 from .models import Listing, ListingOption, Photo, WeeklyHours
 from .search import SearchParams, exists_anywhere, resolve, search_queryset
 from .serializers import (
+    FromPointSerializer,
     ListingCreateSerializer,
     ListingMineSerializer,
     ListingOwnerSerializer,
+    ListingPublicSerializer,
     ListingUpdateSerializer,
     OptionReadSerializer,
     OptionWriteSerializer,
@@ -99,10 +101,24 @@ class ListingMineView(APIView):
 
 
 class ListingDetailView(APIView):
-    """GET / PATCH / DELETE /api/listings/{id}/ (owner only for now; public details in Phase 4)."""
+    """GET /api/listings/{id}/: the owner gets the full owner view (S21 edit); anyone else the renter view (S10).
+    PATCH / DELETE: owner only (someone else's id → 404)."""
 
     def get(self, request, pk):
-        return Response(owner_view(my_listing(request, pk).pk))
+        point = FromPointSerializer(data=request.query_params)
+        point.is_valid(raise_exception=True)
+        listing = get_object_or_404(
+            full_listing_queryset().select_related("owner__home_address").filter(owner__is_active=True)
+            # Paused still opens (with its status), so a card tapped just before the owner paused it
+            # doesn't vanish. Removed = gone.
+            .exclude(status=Listing.Status.REMOVED),
+            pk=pk,
+        )
+        if listing.owner_id == request.user.id:
+            return Response(owner_view(listing.pk))
+        p = point.validated_data
+        context = {"from_point": (p["lat"], p["lng"]) if p else None}
+        return Response(ListingPublicSerializer(listing, context=context).data)
 
     def patch(self, request, pk):
         with transaction.atomic():

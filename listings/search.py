@@ -85,6 +85,13 @@ def bounding_box(lat: float, lng: float, radius_km: float) -> tuple[Decimal, Dec
     return d(lat - dlat), d(lat + dlat), d(lng - dlng), d(lng + dlng)
 
 
+def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """The same formula as haversine_sql, for one listing (details page)."""
+    lat1, lng1, lat2, lng2 = map(math.radians, (*a, *b))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lng2 - lng1) / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(min(h, 1.0)))
+
+
 def haversine_sql(lat: float, lng: float):
     """Straight-line km from (lat, lng) to each listing's pin, computed by PostgreSQL."""
     lat1, lng1 = Radians(Value(lat, FloatField())), Radians(Value(lng, FloatField()))
