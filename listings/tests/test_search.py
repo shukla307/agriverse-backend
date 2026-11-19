@@ -411,3 +411,13 @@ def test_q_query_count_stays_constant(renter, owner):
     few = count_queries()
     add(17)
     assert count_queries() == few
+
+
+def test_hint_says_whether_the_filters_or_the_name_found_nothing(renter, owner):
+    make(owner, JHUSI, hp=45, options=[("", "hour", "600")])
+    # Only hourly tractors exist: per-day finds nothing anywhere, but would without the filter.
+    assert search(renter, q="tractor", unit="day")["hint"] == "no_match_filters"
+    assert search(renter, q="tractor", hp_min=60)["hint"] == "no_match_filters"
+    # Nonsense stays nonsense, filters or not: removing filters wouldn't help.
+    assert search(renter, q="xyzqw", unit="day")["hint"] == "no_match"
+    assert search(renter, q="xyzqw")["hint"] == "no_match"

@@ -4,6 +4,8 @@ Someone else's listing always answers 404, so ids can't be probed (06 §1).
 Search for renters is SearchView (GET /api/search/, listings/search.py). Public details: Phase 4 slice 3.
 """
 
+from dataclasses import replace
+
 from django.db import transaction
 from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
@@ -274,7 +276,7 @@ class WeeklyHoursView(APIView):
 
 class SearchView(APIView):
     """GET /api/search/?lat&lng[&radius_km&job&machine&q&unit&hp_min&hp_max&page]: machines inside the radius,
-    nearest first, 20 per page. count == 0 → hint "none_in_radius" or "no_match"."""
+    nearest first, 20 per page. count == 0 → hint "none_in_radius", "no_match_filters" or "no_match"."""
 
     def get(self, request):
         ser = SearchParamsSerializer(data=request.query_params)
@@ -289,6 +291,14 @@ class SearchView(APIView):
         if response.data["count"] == 0:
             # "none_in_radius": such machines exist, just farther away → the app offers a bigger circle.
             # "no_match": nothing like this anywhere (e.g. nonsense typed) → a bigger circle wouldn't help.
-            found_farther = exists_anywhere(params, exclude_owner=request.user)
-            response.data["hint"] = "none_in_radius" if found_farther else "no_match"
+            # "no_match_filters": nothing anywhere WITH the unit / HP filters, but there is without them
+            # → the app offers "फ़िल्टर हटाएँ" (and not when the typed name is the problem).
+            if exists_anywhere(params, exclude_owner=request.user):
+                response.data["hint"] = "none_in_radius"
+            elif (params.unit or params.hp_min is not None or params.hp_max is not None) and exists_anywhere(
+                replace(params, unit=None, hp_min=None, hp_max=None), exclude_owner=request.user
+            ):
+                response.data["hint"] = "no_match_filters"
+            else:
+                response.data["hint"] = "no_match"
         return response

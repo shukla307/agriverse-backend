@@ -68,7 +68,8 @@ class Command(BaseCommand):
             options, photos, hours = [], [], []
             for listing in listings:
                 options.append(ListingOption(listing=listing, price_unit="hour", price=Decimal(rng.randrange(400, 1200, 50))))
-                if listing.machine_type.kind == "power":
+                # Only tractors pull attachments (a drone + rotavator looked silly on the emulator).
+                if listing.machine_type.code in ("tractor", "mini_tractor"):
                     for imp in rng.sample(implements, k=rng.randint(0, 3)):
                         options.append(ListingOption(listing=listing, implement=imp, price_unit="acre",
                                                      price=Decimal(rng.randrange(800, 2500, 100))))

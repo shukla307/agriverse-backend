@@ -38,7 +38,7 @@ python -m pytest                             # Firebase is faked; uses a throwaw
 ```
 
 - **Speed check data:** `python manage.py seed_listings --count 1000` puts fake listings around Prayagraj into the
-  dev DB (DEBUG only); `seed_listings --delete` removes exactly those. Run `ANALYZE` after seeding, or Postgres
+  dev DB (DEBUG only; only tractors get attachments); `seed_listings --delete` removes exactly those. Run `ANALYZE` after seeding, or Postgres
   plans with stale row counts.
 - **Django admin** (`/admin/`, incl. "new machine types to add"): create your own login once with
   `python manage.py createsuperuser` (phone like +919XXXXXXXXX + a strong password; Claude never sets it).
