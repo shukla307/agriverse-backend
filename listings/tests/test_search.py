@@ -421,3 +421,11 @@ def test_hint_says_whether_the_filters_or_the_name_found_nothing(renter, owner):
     # Nonsense stays nonsense, filters or not: removing filters wouldn't help.
     assert search(renter, q="xyzqw", unit="day")["hint"] == "no_match"
     assert search(renter, q="xyzqw")["hint"] == "no_match"
+
+
+def test_own_machines_never_count_for_the_hint_either(renter, stranger, owner):
+    """BUGS.md #2: the renter's OWN machine farther away must not make the server say "look further"."""
+    make(stranger, PHAPHAMAU)  # the renter's own tractor, ~10 km
+    body = search(renter, radius_km=5)
+    assert body["count"] == 0 and body["hint"] == "no_match"
+    assert ids(search(renter, radius_km=25)) == []
