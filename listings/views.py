@@ -290,18 +290,28 @@ class SearchView(APIView):
         )
         response.data["hint"] = None
         if response.data["count"] == 0:
-            # "none_in_radius": such machines exist, just farther away → the app offers a bigger circle.
-            # "no_match": nothing like this anywhere (e.g. nonsense typed) → a bigger circle wouldn't help.
-            # "no_match_filters": nothing anywhere WITH the job chip / unit / HP filters, but there is without
-            # them → the app offers "फ़िल्टर हटाएँ" (and not when the typed name is the problem). The job counts
-            # as a filter: "drone" with कटाई still chosen found nothing, but drones exist (owner, 2026-11-21).
-            filtered = asked.job or asked.unit or asked.hp_min is not None or asked.hp_max is not None
+            # The empty answer names the REAL cause, because each needs a different button (owner, 2026-11-21):
+            # "none_in_radius": such machines exist, just farther away → a bigger circle.
+            # "no_match_job": the JOB CHIP hides the named machine ("drone" with कटाई) → "{job} में {machine}
+            #     नहीं है" + "सभी कामों में देखें". Farmers look for "फ़िल्टर" in the sheet, not the chips.
+            # "no_match_filters": only the फ़िल्टर sheet (unit / HP) hides it → "फ़िल्टर हटाएँ".
+            # "no_match": nothing like this anywhere (e.g. nonsense typed) → type another name.
+            named = bool(asked.q or asked.machine)
+            sheet = asked.unit or asked.hp_min is not None or asked.hp_max is not None
+            no_sheet = dict(unit=None, hp_min=None, hp_max=None)
+
+            def found_without(**dropped) -> bool:
+                return exists_anywhere(resolve(replace(asked, **dropped)), exclude_owner=request.user)
+
             if exists_anywhere(params, exclude_owner=request.user):
-                response.data["hint"] = "none_in_radius"
-            elif filtered and exists_anywhere(
-                resolve(replace(asked, job=None, unit=None, hp_min=None, hp_max=None)), exclude_owner=request.user
-            ):
-                response.data["hint"] = "no_match_filters"
+                hint = "none_in_radius"
+            elif named and asked.job and found_without(job=None):
+                hint = "no_match_job"
+            elif sheet and found_without(**no_sheet):
+                hint = "no_match_filters"
+            elif named and asked.job and sheet and found_without(job=None, **no_sheet):
+                hint = "no_match_job"  # both hide it: the chip first; the next answer then names the sheet
             else:
-                response.data["hint"] = "no_match"
+                hint = "no_match"
+            response.data["hint"] = hint
         return response

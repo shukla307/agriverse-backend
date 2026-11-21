@@ -423,16 +423,25 @@ def test_hint_says_whether_the_filters_or_the_name_found_nothing(renter, owner):
     assert search(renter, q="xyzqw")["hint"] == "no_match"
 
 
-def test_a_job_chip_that_hides_the_machine_is_a_filter_not_a_wrong_name(renter, owner):
-    """Owner, 2026-11-21: "drone" while the job chip कटाई was still on said "यह मशीन नहीं मिली", although a
-    drone exists (it's छिड़काव). The job hides it, so the honest answer is "remove the filters"."""
+def test_the_empty_answer_names_the_real_cause(renter, owner):
+    """BUGS.md #7 + #11 (owner, 2026-11-21): "drone" with the job chip कटाई said "no such machine", then
+    "remove the filters" sent farmers into the फ़िल्टर sheet, where the job chip isn't. Each cause has its hint."""
     make(owner, JHUSI, machine="drone_sprayer", options=[("", "acre", "400")])
-    body = search(renter, q="drone", job="harvesting")
-    assert body["count"] == 0 and body["hint"] == "no_match_filters"
-    assert search(renter, machine="drone_sprayer", job="harvesting")["hint"] == "no_match_filters"
-    # The machine really doesn't exist anywhere: still "no_match", job or not.
+    make(owner, JHUSI, machine="rotavator", options=[("", "hour", "900")])
+    # The job chip hides it.
+    assert search(renter, q="drone", job="harvesting")["hint"] == "no_match_job"
+    assert search(renter, machine="drone_sprayer", job="harvesting")["hint"] == "no_match_job"
+    assert search(renter, q="drone", job="harvesting", unit="acre")["hint"] == "no_match_job"
+    # Only the फ़िल्टर sheet hides it (the job is right: a rotavator does जुताई).
+    assert search(renter, q="rotavator", job="land_prep", unit="day")["hint"] == "no_match_filters"
+    assert search(renter, q="rotavator", unit="day")["hint"] == "no_match_filters"
+    # Both hide it: the chip first (one honest step at a time).
+    assert search(renter, q="drone", job="harvesting", unit="day")["hint"] == "no_match_job"
+    # It exists nowhere: the name is the problem, job or not.
     assert search(renter, q="thresher", job="threshing")["hint"] == "no_match"
     assert search(renter, q="xyzqw", job="harvesting")["hint"] == "no_match"
+    # A job chip alone (no machine named) that finds nothing isn't "the job hides it".
+    assert search(renter, job="threshing")["hint"] == "no_match"
 
 
 def test_own_machines_never_count_for_the_hint_either(renter, stranger, owner):
