@@ -423,6 +423,18 @@ def test_hint_says_whether_the_filters_or_the_name_found_nothing(renter, owner):
     assert search(renter, q="xyzqw")["hint"] == "no_match"
 
 
+def test_a_job_chip_that_hides_the_machine_is_a_filter_not_a_wrong_name(renter, owner):
+    """Owner, 2026-11-21: "drone" while the job chip कटाई was still on said "यह मशीन नहीं मिली", although a
+    drone exists (it's छिड़काव). The job hides it, so the honest answer is "remove the filters"."""
+    make(owner, JHUSI, machine="drone_sprayer", options=[("", "acre", "400")])
+    body = search(renter, q="drone", job="harvesting")
+    assert body["count"] == 0 and body["hint"] == "no_match_filters"
+    assert search(renter, machine="drone_sprayer", job="harvesting")["hint"] == "no_match_filters"
+    # The machine really doesn't exist anywhere: still "no_match", job or not.
+    assert search(renter, q="thresher", job="threshing")["hint"] == "no_match"
+    assert search(renter, q="xyzqw", job="harvesting")["hint"] == "no_match"
+
+
 def test_own_machines_never_count_for_the_hint_either(renter, stranger, owner):
     """BUGS.md #2: the renter's OWN machine farther away must not make the server say "look further"."""
     make(stranger, PHAPHAMAU)  # the renter's own tractor, ~10 km

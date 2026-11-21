@@ -165,6 +165,24 @@ class AddressListView(APIView):
         return Response(AddressSerializer(address).data, status=status.HTTP_201_CREATED)
 
 
+class AddressDetailView(APIView):
+    """
+    PATCH /api/me/addresses/{id}/ → change one of MY places (Profile: "बदलें" on the home address).
+    The same row is edited, so changing the home again and again never hits the 20-places limit.
+    Someone else's, or a deleted one, is "not found". (DELETE comes with the full S20.)
+    """
+
+    def patch(self, request, pk):
+        address = Address.objects.filter(pk=pk, user=request.user, is_deleted=False).first()
+        if address is None:
+            raise ApiError("not_found", status.HTTP_404_NOT_FOUND)
+        ser = AddressSerializer(address, data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        ser.validated_data.pop("make_home", None)  # this one is already where it is; only its place changes
+        ser.save()
+        return Response(AddressSerializer(address).data)
+
+
 class AppConfigView(APIView):
     """GET /api/app-config/ (public). Also used by the app as a 'can I reach the server?' check."""
 

@@ -114,3 +114,47 @@ def test_login_required(api):
 
 def test_me_shows_no_home_before_s6(me):
     assert me.get("/api/me/").json()["home_address"] is None
+
+
+# ---- PATCH /api/me/addresses/{id}/ (Profile: change the home address, owner 2026-11-21) ----
+
+def patch(api, pk, body):
+    return api.patch(f"/api/me/addresses/{pk}/", body, format="json")
+
+
+def test_change_my_home_moves_the_same_address(me, user):
+    """Editing replaces the place; no new row each time (there's a limit of 20)."""
+    pk = post(me, {**JHUNSI, "landmark": "पुराना"}).json()["id"]
+    res = patch(me, pk, {"lat": 25.5, "lng": 81.85, "village": "फाफामऊ", "district": "प्रयागराज", "landmark": " नया  "})
+    assert res.status_code == 200
+    body = res.json()
+    assert (body["id"], body["village"], body["landmark"]) == (pk, "फाफामऊ", "नया")
+    assert body["lat"] == pytest.approx(25.5)
+    assert Address.objects.filter(user=user).count() == 1
+    user.refresh_from_db()  # the test client keeps this very object as the logged-in user
+    home = me.get("/api/me/").json()["home_address"]
+    assert (home["id"], home["village"]) == (pk, "फाफामऊ")
+
+
+def test_change_label_rules_still_apply(me):
+    pk = post(me, JHUNSI).json()["id"]
+    res = patch(me, pk, {"label": "other"})
+    assert res.status_code == 400 and "label_other" in res.json()["error"]["fields"]
+    assert patch(me, pk, {"label": "other", "label_other": "दूसरा खेत"}).json()["label_other"] == "दूसरा खेत"
+    assert patch(me, pk, {"label": "field"}).json()["label_other"] == ""  # name dropped again
+    assert patch(me, pk, {"lat": 40.7, "lng": -74.0}).status_code == 400  # still India only
+
+
+def test_nobody_can_change_someone_elses_or_a_deleted_address(me, user):
+    other = User.objects.create_user(phone="+919999999999", firebase_uid="u2")
+    theirs = Address.objects.create(user=other, label="home", lat=25, lng=81, village="उनका")
+    assert patch(me, theirs.pk, {"village": "मेरा"}).status_code == 404
+    theirs.refresh_from_db()
+    assert theirs.village == "उनका"
+    gone = post(me, JHUNSI).json()["id"]
+    Address.objects.filter(pk=gone).update(is_deleted=True)
+    assert patch(me, gone, {"village": "x"}).status_code == 404
+
+
+def test_patch_needs_login(api):
+    assert api.patch("/api/me/addresses/1/", {}, format="json").status_code == 401

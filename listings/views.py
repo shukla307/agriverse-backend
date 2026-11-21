@@ -281,7 +281,8 @@ class SearchView(APIView):
     def get(self, request):
         ser = SearchParamsSerializer(data=request.query_params)
         ser.is_valid(raise_exception=True)
-        params = resolve(SearchParams(**ser.validated_data))
+        asked = SearchParams(**ser.validated_data)
+        params = resolve(asked)
         pages = Pages()
         page = pages.paginate_queryset(search_queryset(params, exclude_owner=request.user), request, view=self)
         response = pages.get_paginated_response(
@@ -291,12 +292,14 @@ class SearchView(APIView):
         if response.data["count"] == 0:
             # "none_in_radius": such machines exist, just farther away → the app offers a bigger circle.
             # "no_match": nothing like this anywhere (e.g. nonsense typed) → a bigger circle wouldn't help.
-            # "no_match_filters": nothing anywhere WITH the unit / HP filters, but there is without them
-            # → the app offers "फ़िल्टर हटाएँ" (and not when the typed name is the problem).
+            # "no_match_filters": nothing anywhere WITH the job chip / unit / HP filters, but there is without
+            # them → the app offers "फ़िल्टर हटाएँ" (and not when the typed name is the problem). The job counts
+            # as a filter: "drone" with कटाई still chosen found nothing, but drones exist (owner, 2026-11-21).
+            filtered = asked.job or asked.unit or asked.hp_min is not None or asked.hp_max is not None
             if exists_anywhere(params, exclude_owner=request.user):
                 response.data["hint"] = "none_in_radius"
-            elif (params.unit or params.hp_min is not None or params.hp_max is not None) and exists_anywhere(
-                replace(params, unit=None, hp_min=None, hp_max=None), exclude_owner=request.user
+            elif filtered and exists_anywhere(
+                resolve(replace(asked, job=None, unit=None, hp_min=None, hp_max=None)), exclude_owner=request.user
             ):
                 response.data["hint"] = "no_match_filters"
             else:
