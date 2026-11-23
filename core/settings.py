@@ -135,6 +135,7 @@ REST_FRAMEWORK = {
         "auth_firebase": "10/hour",
         "token_refresh": "60/hour",
         "photos": "30/hour",
+        "bookings": "30/hour",  # POST /api/bookings/ only (sending requests)
     },
 }
 

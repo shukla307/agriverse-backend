@@ -1,9 +1,12 @@
 """
-Availability endpoints (docs/06-api.md §6). Bookings themselves come in Phase 5 slice 3.
+Availability (docs/06-api.md §6) and booking requests (06 §8, Phase 5 slice 3).
 
   GET        /api/listings/{id}/calendar/?from&days     S10 strip, S11 date strip, S15 step 2 (owner)
   GET        /api/listings/{id}/start-times/?option_id&date&quantity   S11 start-time chips
   PUT/DELETE /api/listings/{id}/days/{date}/            S15 step 2: close one date / change its hours / undo
+  POST       /api/bookings/quote/                        check a time + the estimate; holds nothing
+  POST       /api/bookings/                              S11 "बुकिंग भेजें": the locked check, then the request
+  GET        /api/bookings/{id}/                         the renter or the owner of that booking (S12, …)
 
 Renters see only hours. The owner also sees which booking holds each hour and which days they changed.
 """
@@ -11,6 +14,7 @@ Renters see only hours. The owner also sees which booking holds each hour and wh
 from datetime import date, timedelta
 
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers, status
@@ -22,7 +26,10 @@ from listings.models import DayOverride, Listing, ListingOption
 from listings.serializers import WeeklyHoursSerializer
 from listings.views import my_listing
 
+from . import requests as booking_requests
 from .availability import Plan, bookings_outside, hours_for, load_plan, window
+from .models import Booking
+from .serializers import CreateSerializer, QuoteSerializer, booking_json, ist, money
 
 
 def visible_listing(pk) -> Listing:
@@ -216,3 +223,60 @@ class DayView(APIView):
             refuse_if_bookings(listing, now, the_day, weekly.get(the_day.weekday()))
             DayOverride.objects.filter(listing=listing, date=the_day).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------------------------------------------------- booking requests (slice 3)
+
+
+class QuoteView(APIView):
+    """Is this exact time still free, and roughly what will it cost? Holds nothing (06 §8)."""
+
+    def post(self, request):
+        ser = QuoteSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        option = booking_requests.find_option(d["option_id"], request.user)
+        checked = booking_requests.check(option, d["start_at"], d["quantity"], timezone.now())
+        last = checked.slots[-1].end_at
+        return Response({
+            "available": True,
+            "hours": checked.hours,
+            "start_at": ist(checked.slots[0].start_at),
+            "end_at": ist(last),
+            "blocked_until": ist(last + checked.gap),
+            "days": len(checked.slots) if checked.hours is None else None,
+            "estimated_total": money(checked.total()),
+            "price_unit": option.price_unit,
+        })
+
+
+class BookingsView(APIView):
+    throttle_scope = "bookings"
+
+    def post(self, request):
+        ser = CreateSerializer(data=request.data, context={"request": request})
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        option = booking_requests.find_option(d["option_id"], request.user)
+        rows = booking_requests.create(
+            renter=request.user, option=option, start_at=d["start_at"], quantity=d["quantity"],
+            job=d["job"], job_other=d["job_other"], field=d["field"],
+        )
+        # The push to the owner ("booking_requested") comes with notifications (slices 6–7).
+        return Response(booking_json(full_booking(rows[0].pk), group=rows), status=status.HTTP_201_CREATED)
+
+
+def full_booking(pk) -> Booking:
+    return Booking.objects.select_related(
+        "listing__machine_type", "listing__owner", "option__implement", "renter", "job"
+    ).prefetch_related("events").get(pk=pk)
+
+
+class BookingDetailView(APIView):
+    def get(self, request, pk):
+        b = get_object_or_404(
+            Booking.objects.filter(Q(renter=request.user) | Q(listing__owner=request.user)), pk=pk
+        )  # anyone else: 404, so ids can't be probed (06 §1)
+        b = full_booking(b.pk)
+        group = list(Booking.objects.filter(group_id=b.group_id)) if b.group_id else None
+        return Response(booking_json(b, group=group))
