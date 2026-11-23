@@ -83,11 +83,14 @@ class OptionWriteSerializer(serializers.Serializer):
         implement_id = attrs.pop("implement_id", None)
         if implement_id is not None:
             implement = MachineType.objects.filter(pk=implement_id, is_active=True).first()
-            if implement is None or (implement.kind != MachineType.Kind.IMPLEMENT and implement.code != OTHER):
+            if implement is None or (not implement.attachable and implement.code != OTHER):
                 raise serializers.ValidationError({"implement_id": "not_an_implement"})
             if machine.kind == MachineType.Kind.IMPLEMENT:
                 # An implement-only listing is the attachment itself: nothing more to attach.
                 raise serializers.ValidationError({"implement_id": "implement_only_listing"})
+            if not machine.takes_attachments:
+                # Only tractors pull attachments (catalogue setting); a drone + rotavator makes no sense.
+                raise serializers.ValidationError({"implement_id": "no_attachments"})
         attrs["implement"] = implement
         other_text = tidy(attrs.get("implement_other", ""))
         if implement is not None and implement.code == OTHER:
@@ -98,6 +101,10 @@ class OptionWriteSerializer(serializers.Serializer):
             attrs["implement_other"] = ""
 
         unit = attrs["price_unit"]
+        priced = implement if implement is not None and implement.code != OTHER else machine
+        if unit == ListingOption.Unit.ACRE and not priced.acre_price:
+            # e.g. a trolley or a maize sheller: "per acre" makes no sense (catalogue setting).
+            raise serializers.ValidationError({"price_unit": "no_acre"})
         if unit == ListingOption.Unit.NEGOTIABLE:
             attrs["price"] = None
         elif attrs.get("price") is None:
@@ -241,6 +248,27 @@ def max_year() -> int:
     return datetime.date.today().year + 1
 
 
+def apply_settings(attrs: dict, machine: MachineType, creating: bool) -> None:
+    """
+    Keep only the answers this machine's settings ask for (owner, 2026-11-23). Whatever doesn't apply
+    is stored as null, so S10 shows no badge for it. On create, a missing answer gets the wizard's default.
+    """
+    if "operator_included" in attrs:
+        attrs["operator_answer"] = attrs.pop("operator_included")
+    rules = [
+        # field, does it apply?, default when missing/null
+        ("fuel_included", machine.fuel not in (MachineType.Fuel.BATTERY, MachineType.Fuel.NONE),
+         None if machine.fuel == MachineType.Fuel.ASK else False),
+        ("transport_included", machine.asks_transport, True),
+        ("operator_answer", machine.operator == MachineType.Operator.ASK, False),
+    ]
+    for field, applies, default in rules:
+        if not applies:
+            attrs[field] = None
+        elif attrs.get(field) is None and (field in attrs or creating) and default is not None:
+            attrs[field] = default
+
+
 class ListingFieldsSerializer(serializers.Serializer):
     """Fields shared by create and PATCH. Everything optional here; create adds what's required."""
 
@@ -253,8 +281,10 @@ class ListingFieldsSerializer(serializers.Serializer):
     description = serializers.CharField(max_length=500, required=False, allow_blank=True)
     address_id = serializers.IntegerField(required=False, allow_null=True)
     location = LocationSerializer(required=False, allow_null=True)
-    diesel_included = serializers.BooleanField(required=False)
-    transport_included = serializers.BooleanField(required=False)
+    # Each is kept only if this machine asks it (catalogue settings); null = "doesn't apply".
+    fuel_included = serializers.BooleanField(required=False, allow_null=True)
+    transport_included = serializers.BooleanField(required=False, allow_null=True)
+    operator_included = serializers.BooleanField(required=False, allow_null=True)  # अन्य only
     gap_hours = serializers.ChoiceField(choices=[0, 1, 2], required=False)
 
     def validate_year(self, value):
@@ -262,7 +292,7 @@ class ListingFieldsSerializer(serializers.Serializer):
             raise serializers.ValidationError("in_future")
         return value
 
-    def clean_common(self, attrs, machine: MachineType):
+    def clean_common(self, attrs, machine: MachineType, creating: bool = False):
         for f in ("machine_type_other", "brand", "model", "description"):
             if f in attrs:
                 attrs[f] = tidy(attrs[f])
@@ -273,6 +303,7 @@ class ListingFieldsSerializer(serializers.Serializer):
             attrs["machine_type_other"] = ""
         if machine.kind != MachineType.Kind.IMPLEMENT:
             attrs.pop("min_tractor_hp", None)
+        apply_settings(attrs, machine, creating)
         return attrs
 
 
@@ -291,7 +322,7 @@ class ListingCreateSerializer(ListingFieldsSerializer):
         attrs["machine_type"] = machine
         if machine.code == OTHER and not tidy(attrs.get("machine_type_other", "")):
             raise serializers.ValidationError({"machine_type_other": "required"})
-        attrs = self.clean_common(attrs, machine)
+        attrs = self.clean_common(attrs, machine, creating=True)
 
         attrs.update(place_fields(
             user=self.context["user"], address_id=attrs.pop("address_id", None), location=attrs.pop("location", None)
@@ -338,7 +369,8 @@ class ListingUpdateSerializer(ListingFieldsSerializer):
 
 
 def machine_json(m: MachineType) -> dict:
-    return {"id": m.id, "code": m.code, "name_hi": m.name_hi, "kind": m.kind, "icon": m.icon}
+    # fuel: which word the fuel badge uses (डीज़ल / पेट्रोल / तेल), so S10 needs no catalogue lookup.
+    return {"id": m.id, "code": m.code, "name_hi": m.name_hi, "kind": m.kind, "icon": m.icon, "fuel": m.fuel}
 
 
 class ListingOwnerSerializer(serializers.ModelSerializer):
@@ -356,7 +388,7 @@ class ListingOwnerSerializer(serializers.ModelSerializer):
         model = Listing
         fields = (
             "id", "machine", "machine_type_other", "brand", "model", "hp", "year", "min_tractor_hp", "description",
-            "location", "diesel_included", "transport_included", "gap_hours", "operator_included",
+            "location", "fuel_included", "transport_included", "gap_hours", "operator_included",
             "has_schedule", "bookable", "status", "bookings_count", "options", "photos", "weekly_hours", "created_at",
         )
 
@@ -510,7 +542,7 @@ class ListingPublicSerializer(serializers.ModelSerializer):
         model = Listing
         fields = (
             "id", "machine", "machine_type_other", "brand", "model", "hp", "year", "min_tractor_hp", "description",
-            "photos", "options", "operator_included", "diesel_included", "transport_included", "gap_hours",
+            "photos", "options", "operator_included", "fuel_included", "transport_included", "gap_hours",
             "bookable", "weekly_hours", "village", "distance_km", "owner", "status",
         )
 

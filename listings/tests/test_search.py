@@ -41,7 +41,10 @@ def make(owner, where, machine="tractor", options=(("", "hour", "600"),), **fiel
     lat, lng = where
     listing = Listing.objects.create(
         owner=owner, machine_type=mt(machine), lat=Decimal(f"{lat:.6f}"), lng=Decimal(f"{lng:.6f}"),
-        village=fields.pop("village", "गाँव"), landmark="पीपल के पेड़ के पास", **fields,
+        village=fields.pop("village", "गाँव"), landmark="पीपल के पेड़ के पास",
+        # What the wizard would have saved for this machine (catalogue settings).
+        transport_included=fields.pop("transport_included", True if mt(machine).asks_transport else None),
+        **fields,
     )
     for implement, unit, price in options:
         ListingOption.objects.create(
@@ -450,3 +453,29 @@ def test_own_machines_never_count_for_the_hint_either(renter, stranger, owner):
     body = search(renter, radius_km=5)
     assert body["count"] == 0 and body["hint"] == "no_match"
     assert ids(search(renter, radius_km=25)) == []
+
+
+
+def test_a_word_that_names_a_machine_still_finds_names_typed_under_other(renter, owner, village):
+    """"गन्ना" now names गन्ना बोने की मशीन (owner, 2026-11-23). Machines typed under अन्य with that word
+    ("गन्ना हार्वेस्टर", a typed attachment) must still be found, together with the catalogue machine."""
+    planter = make(owner, JHUSI, machine="sugarcane_planter", options=[("", "hour", "700")])
+    crusher_attachment = make(owner, JHUSI, options=[("", "hour", "600")])
+    ListingOption.objects.create(listing=crusher_attachment, implement=mt("other"), implement_other="गन्ना कटर",
+                                 price_unit="day", price=Decimal("3000"))
+    found = set(ids(search(renter, q="गन्ना")))
+    assert found == {village["sugarcane"].id, planter.id, crusher_attachment.id}
+    # The typed attachment only counts at its own unit.
+    assert crusher_attachment.id not in ids(search(renter, q="गन्ना", unit="hour"))
+    assert crusher_attachment.id in ids(search(renter, q="गन्ना", unit="day"))
+    # Plain tractors don't come along just because they're nearby.
+    assert village["mahindra_tractor"].id not in found
+
+
+@pytest.mark.parametrize("q,code", [
+    ("bhusa machine", "straw_reaper"), ("भूसा", "straw_reaper"), ("reaper binder", "reaper_binder"),
+    ("binder", "reaper_binder"), ("ganna planter", "sugarcane_planter"), ("makka sheller", "maize_sheller"),
+])
+def test_new_machines_are_found_by_their_aliases(renter, owner, q, code):
+    listing = make(owner, JHUSI, machine=code, options=[("", "hour", "800")])
+    assert listing.id in ids(search(renter, q=q)), q

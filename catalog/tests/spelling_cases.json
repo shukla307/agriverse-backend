@@ -23,7 +23,21 @@
     ["मुझे रोटावेटर चाहिए", ["rotavator"]],
     ["tractor kiraye par chahiye", ["tractor", "mini_tractor"]],
     ["ड्रोन", ["drone_sprayer"]],
-    ["रोटाव", ["rotavator"]]
+    ["रोटाव", ["rotavator"]],
+    ["bhusa machine", ["straw_reaper"]],
+    ["भूसा मशीन", ["straw_reaper"]],
+    ["भूसा", ["straw_reaper"]],
+    ["straw reaper", ["straw_reaper"]],
+    ["reaper", ["reaper", "reaper_binder", "straw_reaper"]],
+    ["reaper binder", ["reaper_binder"]],
+    ["बाइंडर", ["reaper_binder"]],
+    ["गन्ना", ["sugarcane_planter"]],
+    ["ganna planter", ["sugarcane_planter"]],
+    ["makka sheller", ["maize_sheller"]],
+    ["मक्का", ["maize_sheller"]],
+    ["mini combine", ["combine_harvester"]],
+    ["zero drill", ["seed_drill"]],
+    ["पराली", ["mulcher"]]
   ],
   "job_names": [
     ["जुताई", "land_prep"],

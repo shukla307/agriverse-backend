@@ -14,8 +14,13 @@
   - `catalog/`: `JobCategory` (the 6 Home jobs + अन्य) and `MachineType` (power/implement, `search_aliases` as a
     Postgres array, lower-cased on save, `default_hours_per_acre`). Seeded by migration `0002_seed_catalogue`
     (glossary §7, decision §4, 05 §3.4a); JCB is inactive. Admin pages for both.
-  - `listings/`: `Listing` (one machine; place copied from an address or a map pin; no operator field,
-    `operator_included` = power machine), `ListingOption` (attachment + unit + price; inactive = removed, kept for
+    **Per-machine settings** (decision §20, migrations `0003`/`0004`): `fuel` (diesel / petrol / diesel_or_petrol /
+    battery / none / ask), `operator` (always / never / ask), `asks_transport`, `attachable`, `takes_attachments`,
+    `has_brand`, `acre_price`. They decide what the wizard asks and which answers a listing keeps; editable in admin.
+    `catalog/tests/test_machine_types.py` holds the owner-approved table row by row.
+  - `listings/`: `Listing` (one machine; place copied from an address or a map pin; `fuel_included` /
+    `transport_included` null = doesn't apply; `operator_included` computed from the type, or `operator_answer` for
+    अन्य; `apply_settings()` keeps only what the type asks), `ListingOption` (attachment + unit + price; inactive = removed, kept for
     bookings), `Photo` (0–5, first = cover), `WeeklyHours` (sets `has_schedule`; bookable = active + schedule).
     All rules in `serializers.py`. Admin: **"new machine types to add"** (proxy `NewTypeRequest`) + action
     "Move to a real machine type" (`moving.py`). The machine type can't change after create (decision §18).

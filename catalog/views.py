@@ -31,6 +31,14 @@ def catalogue_data() -> dict:
                 "default_hours_per_acre": (
                     str(m.default_hours_per_acre) if m.default_hours_per_acre is not None else None
                 ),
+                # What the wizard asks for this machine and which badges S10 shows (owner, 2026-11-23).
+                "fuel": m.fuel,
+                "operator": m.operator,
+                "asks_transport": m.asks_transport,
+                "attachable": m.attachable,
+                "takes_attachments": m.takes_attachments,
+                "has_brand": m.has_brand,
+                "acre_price": m.acre_price,
             }
             for m in machines
         ],

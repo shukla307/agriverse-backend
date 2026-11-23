@@ -51,7 +51,7 @@ def tractor_payload(**extra):
     body = {
         "machine_type_id": mt("tractor").id,
         "brand": "Mahindra", "model": "575 DI", "hp": 45, "year": 2019,
-        "diesel_included": False, "transport_included": True, "gap_hours": 1,
+        "fuel_included": False, "transport_included": True, "gap_hours": 1,
         "options": [
             {"implement_id": None, "price_unit": "hour", "price": "600", "min_hours": 2},
             {"implement_id": mt("rotavator").id, "price_unit": "hour", "price": "1000", "min_hours": 2},

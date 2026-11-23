@@ -20,7 +20,7 @@ from django.contrib.postgres.search import TrigramWordSimilarity
 from django.db.models import Exists, F, FloatField, OuterRef, Prefetch, Q, QuerySet, Value
 from django.db.models.functions import ASin, Cast, Cos, Greatest, Least, Power, Radians, Sin, Sqrt
 
-from catalog.matching import understand
+from catalog.matching import FILLER_WORDS, normalise, understand
 from catalog.models import MachineType
 
 from .models import Listing, ListingOption, Photo
@@ -55,6 +55,10 @@ class SearchParams:
     code_filters: tuple[frozenset[str], ...] = ()
     text_words: tuple[str, ...] = ()  # q's words that are no machine: brand, model, typed अन्य names
     q_understood: bool = True
+    # q's words that DID name a machine. The last code filter is q's; it also accepts machines/attachments
+    # typed under अन्य whose name has one of these words ("गन्ना" = गन्ना बोने की मशीन AND a typed
+    # "गन्ना हार्वेस्टर"). Without this, a new catalogue name would hide the farmers' own typed machines.
+    q_named: tuple[str, ...] = ()
 
 
 def resolve(p: SearchParams) -> SearchParams:
@@ -64,13 +68,14 @@ def resolve(p: SearchParams) -> SearchParams:
         filters.append(frozenset(MachineType.objects.filter(jobs__code=p.job).values_list("code", flat=True)))
     if p.machine:
         filters.append(frozenset({p.machine}))
-    words, understood = (), True
+    words, understood, named = (), True, ()
     if p.q:
         u = understand(p.q)
         if u.machine_codes:
             filters.append(frozenset(u.machine_codes))
+            named = tuple(w for w in normalise(p.q).split() if w not in FILLER_WORDS and w not in u.rest)
         words, understood = tuple(u.rest), not u.empty
-    return replace(p, code_filters=tuple(filters), text_words=words, q_understood=understood)
+    return replace(p, code_filters=tuple(filters), text_words=words, q_understood=understood, q_named=named)
 
 
 def bounding_box(lat: float, lng: float, radius_km: float) -> tuple[Decimal, Decimal, Decimal, Decimal]:
@@ -122,6 +127,15 @@ def _text_match(word: str):
         typed_attachment)
 
 
+def _typed_other(words: tuple[str, ...], opts) -> Q:
+    """A machine or attachment typed under अन्य whose name contains one of `words` (at the asked unit)."""
+    cond = Q(pk__in=[])
+    for w in words:
+        cond |= (Q(machine_type__code="other", machine_type_other__icontains=w) & Exists(opts)) | Exists(
+            opts.filter(implement__code="other", implement_other__icontains=w))
+    return cond
+
+
 def _base(p: SearchParams, exclude_owner, *, radius=True) -> QuerySet:
     qs = Listing.objects.filter(status=Listing.Status.ACTIVE, owner__is_active=True)
     if radius:
@@ -131,9 +145,12 @@ def _base(p: SearchParams, exclude_owner, *, radius=True) -> QuerySet:
         qs = qs.exclude(owner=exclude_owner)  # your own machines aren't something to rent
 
     opts = _matching_options(p)
-    for codes in p.code_filters:
+    for i, codes in enumerate(p.code_filters):
         # The machine itself (any of its prices) OR a listing offering it as an attachment.
-        qs = qs.filter((Q(machine_type__code__in=codes) & Exists(opts)) | Exists(opts.filter(implement__code__in=codes)))
+        cond = (Q(machine_type__code__in=codes) & Exists(opts)) | Exists(opts.filter(implement__code__in=codes))
+        if p.q_named and i == len(p.code_filters) - 1:
+            cond |= _typed_other(p.q_named, opts)
+        qs = qs.filter(cond)
     if p.unit and not p.code_filters:
         qs = qs.filter(Exists(opts))
     if p.hp_min is not None:

@@ -43,6 +43,7 @@ class Command(BaseCommand):
         rng = random.Random(42)
         power = list(MachineType.objects.filter(kind="power", is_active=True))
         implements = list(MachineType.objects.filter(kind="implement", is_active=True))
+        attachable = list(MachineType.objects.filter(attachable=True, is_active=True))
         start = User.objects.filter(firebase_uid__startswith=SEED_PREFIX).count()
         with transaction.atomic():
             owners = User.objects.bulk_create(
@@ -56,9 +57,13 @@ class Command(BaseCommand):
                 lng = PRAYAGRAJ[1] + km / (111.045 * math.cos(math.radians(PRAYAGRAJ[0]))) * math.sin(
                     math.radians(bearing))
                 standalone = rng.random() < 0.3
+                machine = rng.choice(implements if standalone else power)
                 listings.append(Listing(
                     owner=rng.choice(owners),
-                    machine_type=rng.choice(implements if standalone else power),
+                    machine_type=machine,
+                    # Only the answers this machine asks (catalogue settings); the rest stay null = no badge.
+                    fuel_included=(rng.random() < 0.3) if machine.fuel not in ("battery", "none") else None,
+                    transport_included=(rng.random() < 0.7) if machine.asks_transport else None,
                     lat=Decimal(f"{lat:.6f}"), lng=Decimal(f"{lng:.6f}"), village=f"गाँव {i}",
                     hp=None if standalone else rng.choice([None, 30, 45, 55]),
                     has_schedule=rng.random() < 0.7,
@@ -68,10 +73,11 @@ class Command(BaseCommand):
             options, photos, hours = [], [], []
             for listing in listings:
                 options.append(ListingOption(listing=listing, price_unit="hour", price=Decimal(rng.randrange(400, 1200, 50))))
-                # Only tractors pull attachments (a drone + rotavator looked silly on the emulator).
-                if listing.machine_type.code in ("tractor", "mini_tractor"):
-                    for imp in rng.sample(implements, k=rng.randint(0, 3)):
-                        options.append(ListingOption(listing=listing, implement=imp, price_unit="acre",
+                # Only tractors pull attachments (catalogue setting takes_attachments).
+                if listing.machine_type.takes_attachments:
+                    for imp in rng.sample(attachable, k=rng.randint(0, 3)):
+                        unit = "acre" if imp.acre_price else "hour"
+                        options.append(ListingOption(listing=listing, implement=imp, price_unit=unit,
                                                      price=Decimal(rng.randrange(800, 2500, 100))))
                 for s in range(rng.randint(0, 3)):
                     photos.append(Photo(listing=listing, url="https://example.com/f.jpg",

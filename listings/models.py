@@ -43,9 +43,13 @@ class Listing(models.Model):
     state = models.CharField(max_length=80, blank=True)
     landmark = models.CharField(max_length=200, blank=True, help_text="Private until a booking is accepted")
 
-    diesel_included = models.BooleanField(default=False)
-    # Transport to the field is always the owner's job; this only says included or charged extra.
-    transport_included = models.BooleanField(default=True)
+    # Each one is asked only if this machine type asks it (catalog MachineType settings, owner 2026-11-23).
+    # null = "doesn't apply" (a battery drone, an attachment pulled by the renter's own tractor…): no badge.
+    fuel_included = models.BooleanField(null=True, blank=True)
+    # Transport to the field is the owner's job; this only says included or charged extra.
+    transport_included = models.BooleanField(null=True, blank=True)
+    # Only for अन्य (operator = "ask"): the owner's answer to "चलाने वाला साथ आएगा?".
+    operator_answer = models.BooleanField(null=True, blank=True)
     gap_hours = models.PositiveSmallIntegerField(choices=GAP_CHOICES, default=1)
     has_schedule = models.BooleanField(default=False)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
@@ -70,8 +74,11 @@ class Listing(models.Model):
 
     @property
     def operator_included(self) -> bool:
-        """Power machines always come with the owner's operator (decision §3). No field, no way to say no."""
-        return self.machine_type.kind == MachineType.Kind.POWER
+        """From the machine type (power machines: always, decision §3); for अन्य, the owner's answer."""
+        op = self.machine_type.operator
+        if op == MachineType.Operator.ASK:
+            return bool(self.operator_answer)
+        return op == MachineType.Operator.ALWAYS
 
     @property
     def bookable(self) -> bool:

@@ -29,8 +29,22 @@ class JobCategory(models.Model):
 
 class MachineType(models.Model):
     class Kind(models.TextChoices):
-        POWER = "power", "Power machine (moves on its own, comes with operator)"
+        POWER = "power", "Power machine (has its own engine/motor)"
         IMPLEMENT = "implement", "Implement (attachment, needs a tractor)"
+
+    class Fuel(models.TextChoices):
+        """Which fuel question the wizard asks, and which badge S10 shows (owner, 2026-11-23)."""
+        DIESEL = "diesel", "Diesel → डीज़ल शामिल?"
+        PETROL = "petrol", "Petrol → पेट्रोल शामिल?"
+        DIESEL_OR_PETROL = "diesel_or_petrol", "Diesel or petrol → तेल (डीज़ल / पेट्रोल) शामिल?"
+        BATTERY = "battery", "Battery (no question)"
+        NONE = "none", "No fuel (attachment: the renter's tractor) — no question"
+        ASK = "ask", "Owner says (अन्य): yes / no / तेल नहीं लगता"
+
+    class Operator(models.TextChoices):
+        ALWAYS = "always", "Always comes with the owner's operator"
+        NEVER = "never", "Never (attachment listed alone)"
+        ASK = "ask", "Owner says (अन्य)"
 
     code = models.SlugField(max_length=40, unique=True)
     name_hi = models.CharField(max_length=80)
@@ -42,6 +56,16 @@ class MachineType(models.Model):
                             help_text="Empty only for 'other' (अन्य)")
     jobs = models.ManyToManyField(JobCategory, related_name="machine_types", blank=True)
     default_hours_per_acre = models.DecimalField(max_digits=3, decimal_places=1, null=True, blank=True)
+
+    # What the "list a machine" wizard asks and what S10 shows for THIS machine (owner, 2026-11-23).
+    fuel = models.CharField(max_length=20, choices=Fuel.choices, default=Fuel.NONE)
+    operator = models.CharField(max_length=10, choices=Operator.choices, default=Operator.NEVER)
+    asks_transport = models.BooleanField(default=False, help_text="Ask 'transport included / extra'")
+    attachable = models.BooleanField(default=False, help_text="Can be added to a tractor listing as an attachment")
+    takes_attachments = models.BooleanField(default=False, help_text="Owner can add attachments (tractors)")
+    has_brand = models.BooleanField(default=False, help_text="Ask brand (tractor brand list) + HP")
+    acre_price = models.BooleanField(default=True, help_text="Can be rented per acre (एकड़)")
+
     sort_order = models.PositiveSmallIntegerField(default=50)
     is_active = models.BooleanField(default=True)
 

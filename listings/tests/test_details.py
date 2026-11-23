@@ -56,7 +56,7 @@ def test_renter_view(renter, full_listing):
     assert body["machine"]["code"] == "tractor" and body["brand"] == "Mahindra" and body["hp"] == 45
     assert body["year"] == 2019 and body["status"] == "active" and body["bookable"] is True
     assert body["operator_included"] is True and body["transport_included"] is True
-    assert body["diesel_included"] is False and body["gap_hours"] == 1
+    assert body["fuel_included"] is False and body["gap_hours"] == 1
     assert body["village"] == "झूंसी"
     assert [p["url"].split("%2F")[-1].split("?")[0] for p in body["photos"]] == ["a_full.jpg", "b_full.jpg"]
     assert set(body["photos"][0]) == {"url", "thumb_url"}

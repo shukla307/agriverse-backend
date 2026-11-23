@@ -41,6 +41,8 @@ def test_machine_shape_from_the_api_doc(me):
         "id": by_code["rotavator"]["id"], "code": "rotavator", "name_hi": "रोटावेटर", "kind": "implement",
         "jobs": ["land_prep"], "search_aliases": ["rotavator", "rotaveter", "rotavetor", "rotawator"],
         "icon": "ic_rotavator", "default_hours_per_acre": "1.5",
+        "fuel": "none", "operator": "never", "asks_transport": False, "attachable": True,
+        "takes_attachments": False, "has_brand": False, "acre_price": True,
     }
     # "अन्य" is always there and always last; JCB is "later", so it's hidden.
     assert body["machine_types"][-1]["code"] == "other"
@@ -88,3 +90,70 @@ def test_query_count_does_not_grow_with_the_list(me):
 def test_aliases_are_saved_lower_case_without_repeats():
     m = MachineType.objects.create(code="x", name_hi="एक्स", search_aliases=["  Big  Tractor ", "big tractor", "BIG"])
     assert m.search_aliases == ["big tractor", "big"]
+
+
+# ---- Per-machine settings (owner, 2026-11-23): the table the owner approved, row by row. ----
+
+# code: (kind, fuel, operator, asks_transport, attachable, takes_attachments, has_brand, acre_price)
+APPROVED = {
+    "tractor": ("power", "diesel", "always", True, False, True, True, True),
+    "mini_tractor": ("power", "diesel", "always", True, False, True, True, True),
+    "combine_harvester": ("power", "diesel", "always", True, False, False, True, True),
+    "reaper_binder": ("power", "diesel_or_petrol", "always", True, False, False, False, True),
+    "power_tiller": ("power", "diesel_or_petrol", "always", True, False, False, True, True),
+    "paddy_transplanter": ("power", "diesel_or_petrol", "always", True, False, False, False, True),
+    "drone_sprayer": ("power", "battery", "always", True, False, False, False, True),
+    # Owner: many threshers have their own engine/motor; a tractor-driven one can still be attached.
+    "thresher": ("power", "diesel_or_petrol", "always", True, True, False, False, True),
+    "trolley": ("implement", "none", "never", False, True, False, False, False),
+    "maize_sheller": ("implement", "none", "never", False, True, False, False, False),
+    "other": (None, "ask", "ask", True, False, False, False, True),
+}
+SETTING_KEYS = ("kind", "fuel", "operator", "asks_transport", "attachable", "takes_attachments", "has_brand",
+                "acre_price")
+PLAIN_ATTACHMENTS = [
+    "rotavator", "cultivator", "plough_mb", "plough_disc", "harrow", "laser_leveller", "seed_drill", "super_seeder",
+    "happy_seeder", "potato_planter", "sugarcane_planter", "boom_sprayer", "reaper", "straw_reaper",
+    "potato_digger", "baler", "mulcher",
+]
+
+
+def test_every_machine_has_the_approved_settings(me):
+    by_code = {m["code"]: m for m in me.get(URL).json()["machine_types"]}
+    expected = dict(APPROVED)
+    for code in PLAIN_ATTACHMENTS:
+        expected[code] = ("implement", "none", "never", False, True, False, False, True)
+    assert set(by_code) == set(expected), "a machine is missing a row in the approved table"
+    for code, row in expected.items():
+        assert tuple(by_code[code][k] for k in SETTING_KEYS) == row, code
+
+
+def test_thresher_keeps_its_name_only_settings_change(me):
+    m = {m["code"]: m for m in me.get(URL).json()["machine_types"]}["thresher"]
+    assert m["name_hi"] == "थ्रेशर" and m["kind"] == "power" and m["attachable"] is True
+
+
+@pytest.mark.parametrize("code,name_hi,jobs,hpa,alias", [
+    ("straw_reaper", "भूसा मशीन (स्ट्रॉ रीपर)", {"harvesting", "threshing"}, "1.0", "bhusa machine"),
+    ("reaper_binder", "रीपर बाइंडर", {"harvesting"}, "1.0", "reaper binder"),
+    ("sugarcane_planter", "गन्ना बोने की मशीन", {"sowing"}, "2.5", "ganna planter"),
+    ("maize_sheller", "मक्का शेलर", {"threshing"}, None, "makka sheller"),
+])
+def test_the_four_new_machines(me, code, name_hi, jobs, hpa, alias):
+    m = {m["code"]: m for m in me.get(URL).json()["machine_types"]}[code]
+    assert (m["name_hi"], set(m["jobs"]), m["default_hours_per_acre"]) == (name_hi, jobs, hpa)
+    assert alias in m["search_aliases"] and m["icon"] == f"ic_{code}"
+
+
+def test_extra_aliases_on_existing_machines(me):
+    by_code = {m["code"]: m for m in me.get(URL).json()["machine_types"]}
+    assert {"mini combine", "छोटा कंबाइन"} <= set(by_code["combine_harvester"]["search_aliases"])
+    assert {"zero drill", "zero till", "जीरो ड्रिल"} <= set(by_code["seed_drill"]["search_aliases"])
+    assert {"straw chopper", "पराली"} <= set(by_code["mulcher"]["search_aliases"])
+
+
+def test_power_machines_first_then_attachments_then_other(me):
+    kinds = [m["kind"] for m in me.get(URL).json()["machine_types"]]
+    first_implement = kinds.index("implement")
+    assert all(k == "power" for k in kinds[:first_implement])
+    assert all(k == "implement" for k in kinds[first_implement:-1]) and kinds[-1] is None

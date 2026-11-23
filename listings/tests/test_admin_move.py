@@ -50,7 +50,7 @@ def test_move_other_machine_to_new_type(other_machine):
 def test_move_other_attachment_only_to_an_implement(other_attachment):
     tractor = mt("tractor")
     assert move_to_type([other_attachment], tractor) == (0, 0)  # a power machine is not an attachment
-    ridger = MachineType.objects.create(code="ridger", name_hi="रिज मेकर", kind="implement")
+    ridger = MachineType.objects.create(code="ridger", name_hi="रिज मेकर", kind="implement", attachable=True)
     assert move_to_type([other_attachment], ridger) == (0, 1)
     opt = other_attachment.options.get(implement=ridger)
     assert opt.implement_other == ""
