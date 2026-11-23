@@ -24,11 +24,18 @@
     bookings), `Photo` (0–5, first = cover), `WeeklyHours` (sets `has_schedule`; bookable = active + schedule).
     All rules in `serializers.py`. Admin: **"new machine types to add"** (proxy `NewTypeRequest`) + action
     "Move to a real machine type" (`moving.py`). The machine type can't change after create (decision §18).
+  - `bookings/` (Phase 5): `Booking` (+ `BookingEvent` history). The DATABASE refuses two active bookings on one
+    listing whose `[start_at, blocked_until)` overlap (btree_gist exclusion constraint; Postgres only).
+    `availability.py` = THE one place for "free?": IST↔UTC (`at(day, hour)`, round in IST), open hours
+    (DayOverride → WeeklyHours → closed), busy hours, start times, per-day free days, `hours_for()` (acres rounded
+    up), `expires_at_for()` (2 h today/tomorrow, 6 h for 2+ days, never after start; decision §21),
+    `bookings_outside()` for `has_bookings`. Views: `calendar/`, `start-times/`, `days/{date}/`. Tests freeze time at
+    Mon 2026-11-23 07:30 IST (`freezegun`, dev only). `DayOverride` lives in `listings/` next to WeeklyHours.
   - `core/storage.py` `bucket_path(url)`: the one check for "is this link a file in OUR bucket?".
     `core/pagination.py` `Pages`: 20 per page → `{count, next_page, results}`.
   - The old `api/` and `equipment/` apps (and the commented-out `core/firebase.py`) were **deleted on `v1`** (cleanup, 2026-11-19). They exist only on `master`.
 - Endpoints so far: `POST /api/auth/firebase/`, `POST /api/auth/token/refresh/`, `POST /api/auth/logout/`, `GET`/`PATCH /api/me/`, `GET`/`POST /api/me/addresses/`, `PATCH /api/me/addresses/{id}/` (own, not deleted; edits the same row), `POST /api/listings/`, `GET /api/listings/mine/`, `GET`/`PATCH`/`DELETE /api/listings/{id}/` (GET: owner →
-  owner view, anyone else → renter view without phone/landmark/pin; PATCH/DELETE owner only), `…/options/`, `…/photos/` (+ `order/`), `PUT …/weekly-hours/`, `GET /api/search/` (renters: radius, job/machine/q/unit/HP, nearest first; empty → hint none_in_radius / no_match_job (job chip hides the named machine) / no_match_filters (unit/HP only) / no_match; `listings/search.py`; any-spelling rules in `catalog/matching.py`, cases in `catalog/tests/spelling_cases.json`, shared with the app), `GET /api/machine-types/` (ETag = fingerprint of the content, so any admin edit
+  owner view, anyone else → renter view without phone/landmark/pin; PATCH/DELETE owner only), `…/options/`, `…/photos/` (+ `order/`), `PUT …/weekly-hours/` (409 `has_bookings`), `GET …/calendar/`, `GET …/start-times/`, `PUT`/`DELETE …/days/{date}/`, `GET /api/search/` (renters: radius, job/machine/q/unit/HP, nearest first; empty → hint none_in_radius / no_match_job (job chip hides the named machine) / no_match_filters (unit/HP only) / no_match; `listings/search.py`; any-spelling rules in `catalog/matching.py`, cases in `catalog/tests/spelling_cases.json`, shared with the app), `GET /api/machine-types/` (ETag = fingerprint of the content, so any admin edit
   changes it; `If-None-Match` → 304), `GET /api/app-config/`.
 - `Address` (घर/खेत/अन्य, India-only pin, village may be blank, max 20 per user). The first one, or `make_home`, becomes `User.home_address`. Login's `is_new_user` = no name **or** no home address.
 - `PATCH /api/me/` only accepts a `photo_url` pointing to `profiles/<firebase_uid>/avatar.jpg` in `FIREBASE_STORAGE_BUCKET` (default `<project>.firebasestorage.app`), so nobody can attach another person's photo. The full plan is in `~/agriverse/docs/06-api.md`.

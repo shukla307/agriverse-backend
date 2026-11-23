@@ -178,6 +178,34 @@ class WeeklyHours(models.Model):
         return f"{self.weekday}: {self.start_hour}–{self.end_hour}"
 
 
+class DayOverride(models.Model):
+    """One date that differs from the weekly schedule (decision §11 step 2, 05 §3.8): closed all day, or
+    different hours. Deleting the row = the day goes back to its weekly hours."""
+
+    listing = models.ForeignKey(Listing, on_delete=models.CASCADE, related_name="day_overrides")
+    date = models.DateField(help_text="IST date")
+    is_closed = models.BooleanField(default=False)
+    start_hour = models.PositiveSmallIntegerField(null=True, blank=True)
+    end_hour = models.PositiveSmallIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("date",)
+        constraints = [
+            models.UniqueConstraint(fields=["listing", "date"], name="override_one_per_date"),
+            # Closed → no hours. Open → both hours, "तक" after "से", at most midnight.
+            models.CheckConstraint(
+                check=(Q(is_closed=True, start_hour__isnull=True, end_hour__isnull=True)
+                       | Q(is_closed=False, start_hour__isnull=False, end_hour__gt=models.F("start_hour"),
+                           end_hour__lte=24)),
+                name="override_closed_or_hours",
+            ),
+        ]
+
+    def __str__(self):
+        return f"#{self.listing_id} {self.date}: " + ("बंद" if self.is_closed else f"{self.start_hour}–{self.end_hour}")
+
+
 class NewTypeRequest(Listing):
     """
     Admin-only view of listings where the owner picked "अन्य" (as the machine or an attachment).

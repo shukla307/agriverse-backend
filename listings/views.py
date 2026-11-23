@@ -16,7 +16,7 @@ from rest_framework.views import APIView
 from core.errors import ApiError
 from core.pagination import Pages
 
-from .models import Listing, ListingOption, Photo, WeeklyHours
+from .models import DayOverride, Listing, ListingOption, Photo, WeeklyHours
 from .search import SearchParams, exists_anywhere, resolve, search_queryset
 from .serializers import (
     FromPointSerializer,
@@ -59,8 +59,22 @@ def owner_view(listing_id) -> dict:
     return ListingOwnerSerializer(full_listing_queryset().get(pk=listing_id)).data
 
 
+def refuse_if_week_drops_bookings(listing: Listing, new_week: dict[int, tuple[int, int]]):
+    """409 has_bookings (+ their ids) when an accepted or pending booking would fall outside the new weekly
+    hours (06 §6). Dates the owner changed one by one (DayOverride) keep their own hours, so they're skipped."""
+    from django.utils import timezone
+
+    from bookings.availability import bookings_outside
+
+    now = timezone.now()
+    changed = set(DayOverride.objects.filter(listing=listing).values_list("date", flat=True))
+    ids = bookings_outside(listing, now, lambda day: False if day in changed else new_week.get(day.weekday()))
+    if ids:
+        raise ApiError("has_bookings", status.HTTP_409_CONFLICT, fields={"booking_ids": ids})
+
+
 def save_week(listing: Listing, days: list[dict]):
-    """Replace the whole weekly schedule. Booking clashes (409 has_bookings) are checked in Phase 5."""
+    """Replace the whole weekly schedule (callers check bookings first: refuse_if_week_drops_bookings)."""
     WeeklyHours.objects.filter(listing=listing).delete()
     WeeklyHours.objects.bulk_create(WeeklyHours(listing=listing, **d) for d in days)
     listing.has_schedule = bool(days)
@@ -266,8 +280,10 @@ class WeeklyHoursView(APIView):
     def put(self, request, pk):
         ser = WeekSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+        new_week = {d["weekday"]: (d["start_hour"], d["end_hour"]) for d in ser.validated_data["days"]}
         with transaction.atomic():
-            listing = my_listing(request, pk, lock=True)
+            listing = my_listing(request, pk, lock=True)  # same lock as booking creation (05 §5)
+            refuse_if_week_drops_bookings(listing, new_week)
             save_week(listing, ser.validated_data["days"])
         days = [{"weekday": w.weekday, "start_hour": w.start_hour, "end_hour": w.end_hour}
                 for w in listing.weekly_hours.all()]
