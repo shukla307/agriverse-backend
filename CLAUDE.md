@@ -29,7 +29,8 @@
     `availability.py` = THE one place for "free?": IST↔UTC (`at(day, hour)`, round in IST), open hours
     (DayOverride → WeeklyHours → closed), busy hours, start times, per-day free days, `hours_for()` (acres rounded
     up), `expires_at_for()` (2 h today/tomorrow, 6 h for 2+ days, never after start; decision §21),
-    `bookings_outside()` for `has_bookings`. Views: `calendar/`, `start-times/`, `days/{date}/`. Tests freeze time at
+    `bookings_outside()` for `has_bookings`; `plans_for()` / `open_on_q()` / `free_ids()` for search's `date`
+    (≥ 1 free start hour that day; hint `no_match_date`). Views: `calendar/`, `start-times/`, `days/{date}/`. Tests freeze time at
     Mon 2026-11-23 07:30 IST (`freezegun`, dev only). `DayOverride` lives in `listings/` next to WeeklyHours.
   - `core/storage.py` `bucket_path(url)`: the one check for "is this link a file in OUR bucket?".
     `core/pagination.py` `Pages`: 20 per page → `{count, next_page, results}`.

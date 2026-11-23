@@ -291,8 +291,9 @@ class WeeklyHoursView(APIView):
 
 
 class SearchView(APIView):
-    """GET /api/search/?lat&lng[&radius_km&job&machine&q&unit&hp_min&hp_max&page]: machines inside the radius,
-    nearest first, 20 per page. count == 0 → hint "none_in_radius", "no_match_filters" or "no_match"."""
+    """GET /api/search/?lat&lng[&radius_km&job&machine&q&unit&hp_min&hp_max&date&page]: machines inside the
+    radius, nearest first, 20 per page. count == 0 → hint "none_in_radius", "no_match_job", "no_match_date",
+    "no_match_filters" or "no_match"."""
 
     def get(self, request):
         ser = SearchParamsSerializer(data=request.query_params)
@@ -310,6 +311,7 @@ class SearchView(APIView):
             # "none_in_radius": such machines exist, just farther away → a bigger circle.
             # "no_match_job": the JOB CHIP hides the named machine ("drone" with कटाई) → "{job} में {machine}
             #     नहीं है" + "सभी कामों में देखें". Farmers look for "फ़िल्टर" in the sheet, not the chips.
+            # "no_match_date": the chosen DAY hides them (all busy / closed that day) → back to any day.
             # "no_match_filters": only the फ़िल्टर sheet (unit / HP) hides it → "फ़िल्टर हटाएँ".
             # "no_match": nothing like this anywhere (e.g. nonsense typed) → type another name.
             named = bool(asked.q or asked.machine)
@@ -323,6 +325,9 @@ class SearchView(APIView):
                 hint = "none_in_radius"
             elif named and asked.job and found_without(job=None):
                 hint = "no_match_job"
+            # "no_match_date": the machines exist, but none is free on the chosen day → "कोई भी दिन".
+            elif asked.date and found_without(date=None):
+                hint = "no_match_date"
             elif sheet and found_without(**no_sheet):
                 hint = "no_match_filters"
             elif named and asked.job and sheet and found_without(job=None, **no_sheet):

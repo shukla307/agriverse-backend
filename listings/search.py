@@ -9,11 +9,14 @@ How one search runs:
 
 Never in a result: phone, landmark, exact lat/lng (privacy, 06 §7).
 q: catalog/matching.py understands machine names in any spelling; other words are looked for in brand,
-model and typed अन्य names (pg_trgm). Not in Phase 4: date / start_at (Phase 5, decision §19).
+model and typed अन्य names (pg_trgm).
+date (Phase 5 slice 2, decision §21): only machines with at least one free hour that day
+(bookings/availability.py free_ids: the same rules as the start-time chips). Paused / no hours / closed = left out.
 """
 
 import math
 from dataclasses import dataclass, replace
+from datetime import date as Date
 from decimal import Decimal
 
 from django.contrib.postgres.search import TrigramWordSimilarity
@@ -51,6 +54,7 @@ class SearchParams:
     unit: str | None = None
     hp_min: int | None = None
     hp_max: int | None = None
+    date: Date | None = None  # "कब चाहिए?" (IST date); None = कोई भी दिन
     # Filled in by resolve(): each set is "the machine OR an attachment must be one of these codes".
     code_filters: tuple[frozenset[str], ...] = ()
     text_words: tuple[str, ...] = ()  # q's words that are no machine: brand, model, typed अन्य names
@@ -168,6 +172,15 @@ def _with_text(qs: QuerySet, p: SearchParams) -> QuerySet:
     return qs
 
 
+def _on_date(qs: QuerySet, p: SearchParams) -> QuerySet:
+    """Keep only machines free for at least one hour on p.date (the rest of the query is unchanged)."""
+    if p.date is None:
+        return qs
+    from bookings.availability import free_ids
+
+    return qs.filter(pk__in=free_ids(qs, p.date))
+
+
 def search_queryset(p: SearchParams, *, exclude_owner=None) -> QuerySet:
     """`p` must come from resolve(). Extra words narrow the result ("mahindra tractor"), but if they'd leave
     nothing while a machine WAS understood, they're ignored ("jaldi tractor" still finds tractors)."""
@@ -177,6 +190,7 @@ def search_queryset(p: SearchParams, *, exclude_owner=None) -> QuerySet:
     if p.text_words:
         narrowed = _with_text(qs, p)
         qs = narrowed if not p.code_filters or narrowed.exists() else qs
+    qs = _on_date(qs, p)
     return (
         qs.order_by("distance_km", "id")
         .select_related("machine_type", "owner")
@@ -196,7 +210,12 @@ def exists_anywhere(p: SearchParams, *, exclude_owner=None) -> bool:
     if p.q and not p.q_understood:
         return False
     qs = _base(p, exclude_owner, radius=False)
-    return (_with_text(qs, p) if p.text_words and not p.code_filters else qs).exists()
+    qs = _with_text(qs, p) if p.text_words and not p.code_filters else qs
+    if p.date is not None:
+        from bookings.availability import free_ids
+
+        return bool(free_ids(qs, p.date, stop_at_first=True))
+    return qs.exists()
 
 
 # ---- per-result details, from the prefetched rows (no extra queries) ----

@@ -210,3 +210,54 @@ def bookings_outside(listing: Listing, now: datetime, open_for_day) -> list[int]
         if new is None or s < new[0] or e > new[1]:
             ids.append(b.pk)
     return ids
+
+
+# --------------------------------------------------------------------- many listings at once (search)
+
+def plans_for(listings: list[Listing], first: date, last: date, now: datetime | None = None) -> dict[int, Plan]:
+    """load_plan() for many listings in 3 queries (not 3 per listing)."""
+    from listings.models import WeeklyHours
+
+    now = now or timezone.now()
+    ids = [x.pk for x in listings]
+    weekly: dict[int, dict] = {i: {} for i in ids}
+    for w in WeeklyHours.objects.filter(listing_id__in=ids):
+        weekly[w.listing_id][w.weekday] = (w.start_hour, w.end_hour)
+    overrides: dict[int, dict] = {i: {} for i in ids}
+    for o in DayOverride.objects.filter(listing_id__in=ids, date__range=(first, last)):
+        overrides[o.listing_id][o.date] = o
+    bookings: dict[int, list] = {i: [] for i in ids}
+    for b in (Booking.objects.filter(listing_id__in=ids).filter(active_q(now))
+              .filter(start_at__lt=at(last, 24), blocked_until__gt=at(first, 0)).order_by("start_at")):
+        bookings[b.listing_id].append(b)
+    return {x.pk: Plan(listing=x, now=now, weekly=weekly[x.pk], overrides=overrides[x.pk], bookings=bookings[x.pk])
+            for x in listings}
+
+
+def open_on_q(day: date) -> Q:
+    """SQL pre-check for search: has hours, and open on `day` (a changed day's hours, else its weekday's).
+    Cheap and index-friendly; the exact "is an hour still free?" check follows in Python (free_ids)."""
+    from django.db.models import Exists, OuterRef
+
+    from listings.models import WeeklyHours
+
+    override = DayOverride.objects.filter(listing=OuterRef("pk"), date=day)
+    weekly = WeeklyHours.objects.filter(listing=OuterRef("pk"), weekday=day.weekday())
+    return Q(has_schedule=True) & (
+        Exists(override.filter(is_closed=False)) | (Exists(weekly) & ~Exists(override))
+    )
+
+
+def free_ids(listings, day: date, now: datetime | None = None, *, stop_at_first=False) -> list[int]:
+    """Of these listings, the ones with at least one free start hour on `day` for a 1-hour job (decision §21:
+    "कब चाहिए?" is a date, so a machine counts as free that day if ANY hour is still free; S11 then shows
+    exactly which). Same rules as the start-time chips: open hours, other bookings + gaps, not in the past."""
+    now = now or timezone.now()
+    listings = list(listings.filter(open_on_q(day)).only("pk", "has_schedule", "gap_hours", "status"))
+    free = []
+    for pk, plan in plans_for(listings, day, day, now).items():
+        if plan.start_hours(day, 1):
+            free.append(pk)
+            if stop_at_first:
+                break
+    return free

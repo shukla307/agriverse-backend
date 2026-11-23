@@ -462,6 +462,15 @@ class SearchParamsSerializer(serializers.Serializer):
     unit = serializers.ChoiceField(choices=ListingOption.Unit.values, required=False)
     hp_min = serializers.IntegerField(min_value=0, max_value=500, required=False)
     hp_max = serializers.IntegerField(min_value=0, max_value=500, required=False)
+    date = serializers.DateField(required=False)  # "कब चाहिए?" (IST); today … today + 29
+
+    def validate_date(self, day):
+        from bookings.availability import window
+
+        first, last = window()
+        if not first <= day <= last:
+            raise serializers.ValidationError("outside_30_days")
+        return day
 
     def validate_job(self, code):
         if not JobCategory.objects.filter(code=code, is_active=True).exists():
