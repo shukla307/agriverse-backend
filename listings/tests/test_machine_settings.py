@@ -1,7 +1,7 @@
 """
-Each machine type asks only what makes sense (owner, 2026-11-23): the catalogue's settings decide which
-answers a listing keeps (fuel, transport, operator), which attachments it may have, and whether एकड़ prices
-are allowed. Whatever doesn't apply is stored as null, so S10 shows no badge for it.
+Each machine type's settings (owner, 2026-11-23) decide which terms APPLY to it (fuel, transport, operator),
+which attachments it may have, and whether एकड़ prices are allowed. Since decision §22 (owner, 2026-11-26) the
+terms that apply are always "included" and not asked; whatever doesn't apply is null (no badge on S10).
 """
 
 import pytest
@@ -37,35 +37,38 @@ def answers(body):
     return body["fuel_included"], body["transport_included"], body["operator_included"]
 
 
-# ---- fuel / transport / operator ----
+# ---- fuel / transport / operator: fixed, not asked (owner, 2026-11-26, decision §22) ----
 
-def test_drone_runs_on_battery_so_no_fuel_answer_is_kept(me):
-    body = create(me, body_for("drone_sprayer", fuel_included=True, transport_included=False))
-    assert answers(body) == (None, False, True)
+def test_tractor_fuel_and_transport_always_included_gap_1(me):
+    body = create(me, body_for("tractor"))
+    assert answers(body) == (True, True, True)
+    assert body["gap_hours"] == 1 and body["machine"]["fuel"] == "diesel"
+
+
+def test_old_answers_sent_by_an_app_are_ignored(me):
+    # An app built before decision §22 may still send "diesel extra", "transport extra", "no gap".
+    body = create(me, tractor_payload(fuel_included=False, transport_included=False, gap_hours=0))
+    assert answers(body) == (True, True, True)
+    assert body["gap_hours"] == 1
+
+
+def test_drone_runs_on_battery_so_fuel_does_not_apply(me):
+    body = create(me, body_for("drone_sprayer", fuel_included=False))
+    assert answers(body) == (None, True, True)
     assert body["machine"]["fuel"] == "battery"
 
 
 def test_attachment_alone_keeps_no_fuel_transport_or_operator(me):
-    # The renter's own tractor pulls it and fetches it: none of the three questions apply.
+    # The renter's own tractor pulls it and fetches it: none of the three apply.
     body = create(me, body_for("rotavator", fuel_included=True, transport_included=True, operator_included=True,
                                 min_tractor_hp=35))
     assert answers(body) == (None, None, False)
     assert body["min_tractor_hp"] == 35
 
 
-def test_tractor_gets_the_wizard_defaults_when_nothing_is_sent(me):
-    body = create(me, body_for("tractor"))
-    assert answers(body) == (False, True, True)
-    assert body["machine"]["fuel"] == "diesel"
-
-
-def test_tractor_keeps_its_answers(me):
-    assert answers(create(me, tractor_payload(fuel_included=True, transport_included=False))) == (True, False, True)
-
-
 @pytest.mark.parametrize("code", ["power_tiller", "paddy_transplanter", "reaper_binder", "thresher"])
-def test_diesel_or_petrol_machines_keep_the_fuel_answer(me, code):
-    body = create(me, body_for(code, fuel_included=True))
+def test_diesel_or_petrol_machines_include_fuel(me, code):
+    body = create(me, body_for(code, fuel_included=False))
     assert answers(body) == (True, True, True)
     assert body["machine"]["fuel"] == "diesel_or_petrol"
 
@@ -76,26 +79,25 @@ def test_thresher_alone_is_a_power_machine_now(me):
     assert body["min_tractor_hp"] is None  # only attachments listed alone need the renter's tractor
 
 
-def test_other_machine_owner_answers_all_three(me):
-    body = create(me, body_for("other", machine_type_other="गन्ना कोल्हू",
-                                fuel_included=None, transport_included=False, operator_included=True))
-    assert answers(body) == (None, False, True)  # None = "तेल नहीं लगता"
-    body = create(me, body_for("other", machine_type_other="पानी का पंप", fuel_included=True))
+def test_other_machine_still_answers_only_the_operator_question(me):
+    body = create(me, body_for("other", machine_type_other="गन्ना कोल्हू", fuel_included=None,
+                                transport_included=False, operator_included=True))
+    assert answers(body) == (True, True, True)
+    body = create(me, body_for("other", machine_type_other="पानी का पंप"))
     assert answers(body) == (True, True, False)  # missing operator answer → no operator line
 
 
-def test_patch_cannot_add_an_answer_the_machine_does_not_ask(me):
-    listing_id = create(me, body_for("drone_sprayer"))["id"]
-    res = me.patch(f"{URL}{listing_id}/", {"fuel_included": True, "operator_included": False}, format="json")
+def test_patch_cannot_change_the_fixed_terms(me, listing_id):
+    res = me.patch(f"{URL}{listing_id}/", {"fuel_included": False, "transport_included": False, "gap_hours": 2},
+                   format="json")
     assert res.status_code == 200
-    assert answers(res.json()) == (None, True, True)
+    assert answers(res.json()) == (True, True, True) and res.json()["gap_hours"] == 1
 
 
-def test_patch_changes_an_answer_the_machine_asks(me, listing_id):
-    res = me.patch(f"{URL}{listing_id}/", {"fuel_included": True}, format="json")
-    assert res.json()["fuel_included"] is True
-    # Untouched answers stay as they were.
-    assert res.json()["transport_included"] is True
+def test_patch_still_changes_the_other_machines_operator_answer(me):
+    listing_id = create(me, body_for("other", machine_type_other="पंप"))["id"]
+    res = me.patch(f"{URL}{listing_id}/", {"operator_included": True}, format="json")
+    assert res.json()["operator_included"] is True
 
 
 def test_renter_view_has_the_fuel_word_and_null_badges(me, api, stranger):
@@ -165,20 +167,18 @@ def test_new_machine_per_acre_uses_its_default_hours(me):
 
 def test_moved_other_machine_follows_the_new_types_settings(me):
     listing = Listing.objects.get(pk=create(me, body_for(
-        "other", machine_type_other="धान की पुआल मशीन", fuel_included=True, transport_included=True,
-        operator_included=True))["id"])
+        "other", machine_type_other="धान की पुआल मशीन", operator_included=True))["id"])
     move_to_type([listing], mt("mulcher"))
     listing.refresh_from_db()
     assert (listing.fuel_included, listing.transport_included, listing.operator_answer) == (None, None, None)
     assert listing.operator_included is False
 
 
-def test_moved_other_machine_keeps_answers_the_new_type_asks(me):
-    listing = Listing.objects.get(pk=create(me, body_for(
-        "other", machine_type_other="बाइंडर", fuel_included=True, transport_included=False))["id"])
+def test_moved_other_machine_keeps_included_terms_the_new_type_has(me):
+    listing = Listing.objects.get(pk=create(me, body_for("other", machine_type_other="बाइंडर"))["id"])
     move_to_type([listing], mt("reaper_binder"))
     listing.refresh_from_db()
-    assert (listing.fuel_included, listing.transport_included) == (True, False)
+    assert (listing.fuel_included, listing.transport_included) == (True, True)
     assert listing.operator_included is True
 
 

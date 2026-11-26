@@ -110,11 +110,8 @@ class OptionWriteSerializer(serializers.Serializer):
         elif attrs.get("price") is None:
             raise serializers.ValidationError({"price": "required"})
 
-        # Minimum hours only mean something for per-hour (and मोल-भाव) bookings.
-        if unit not in (ListingOption.Unit.HOUR, ListingOption.Unit.NEGOTIABLE):
-            attrs["min_hours"] = 1
-        else:
-            attrs.setdefault("min_hours", 1)
+        # Decision §22: the minimum is always 1 hour; the owner isn't asked (whatever is sent is ignored).
+        attrs["min_hours"] = 1
 
         if unit == ListingOption.Unit.ACRE:
             own = attrs.get("hours_per_acre")
@@ -250,23 +247,36 @@ def max_year() -> int:
 
 def apply_settings(attrs: dict, machine: MachineType, creating: bool) -> None:
     """
-    Keep only the answers this machine's settings ask for (owner, 2026-11-23). Whatever doesn't apply
-    is stored as null, so S10 shows no badge for it. On create, a missing answer gets the wizard's default.
+    The terms are fixed now (owner, 2026-11-26, decision §22), not asked:
+      - fuel is always included in the rent, where the machine uses fuel (a battery drone or an attachment
+        pulled by the renter's own tractor: null = doesn't apply, no badge)
+      - transport is always included, where it applies
+      - the gap after each booking is always 1 hour
+    Whatever the app sends for these is ignored. Only अन्य still answers "चलाने वाला साथ आएगा?".
     """
     if "operator_included" in attrs:
         attrs["operator_answer"] = attrs.pop("operator_included")
-    rules = [
-        # field, does it apply?, default when missing/null
-        ("fuel_included", machine.fuel not in (MachineType.Fuel.BATTERY, MachineType.Fuel.NONE),
-         None if machine.fuel == MachineType.Fuel.ASK else False),
-        ("transport_included", machine.asks_transport, True),
-        ("operator_answer", machine.operator == MachineType.Operator.ASK, False),
-    ]
-    for field, applies, default in rules:
-        if not applies:
-            attrs[field] = None
-        elif attrs.get(field) is None and (field in attrs or creating) and default is not None:
-            attrs[field] = default
+    for field in ("fuel_included", "transport_included", "gap_hours"):
+        attrs.pop(field, None)
+    if creating:
+        attrs["fuel_included"] = True if machine.fuel not in (MachineType.Fuel.BATTERY, MachineType.Fuel.NONE) else None
+        attrs["transport_included"] = True if machine.asks_transport else None
+        attrs["gap_hours"] = Listing.GAP_HOURS
+    if machine.operator != MachineType.Operator.ASK:
+        attrs["operator_answer"] = None
+    elif attrs.get("operator_answer") is None and ("operator_answer" in attrs or creating):
+        attrs["operator_answer"] = False
+
+
+def one_unit(options: list[dict]) -> None:
+    """Decision §22: the owner picks the price unit ONCE; every price of a machine is in that unit."""
+    if len({o["price_unit"] for o in options}) > 1:
+        raise serializers.ValidationError({"options": "one_unit"})
+
+
+def default_week() -> list[dict]:
+    start, end = Listing.DEFAULT_HOURS
+    return [{"weekday": d, "start_hour": start, "end_hour": end} for d in range(7)]
 
 
 class ListingFieldsSerializer(serializers.Serializer):
@@ -281,11 +291,8 @@ class ListingFieldsSerializer(serializers.Serializer):
     description = serializers.CharField(max_length=500, required=False, allow_blank=True)
     address_id = serializers.IntegerField(required=False, allow_null=True)
     location = LocationSerializer(required=False, allow_null=True)
-    # Each is kept only if this machine asks it (catalogue settings); null = "doesn't apply".
-    fuel_included = serializers.BooleanField(required=False, allow_null=True)
-    transport_included = serializers.BooleanField(required=False, allow_null=True)
+    # Fuel, transport and gap are fixed (decision §22) and not read; only अन्य answers the operator question.
     operator_included = serializers.BooleanField(required=False, allow_null=True)  # अन्य only
-    gap_hours = serializers.ChoiceField(choices=[0, 1, 2], required=False)
 
     def validate_year(self, value):
         if value is not None and value > max_year():
@@ -341,15 +348,37 @@ class ListingCreateSerializer(ListingFieldsSerializer):
         keys = [option_key(o) for o in options]
         if len(keys) != len(set(keys)):
             raise serializers.ValidationError({"options": "duplicate_option"})
+        one_unit(options)
         attrs["options"] = options
 
         if len(attrs.get("photos", [])) > Listing.MAX_PHOTOS:
             raise serializers.ValidationError({"photos": "too_many_photos"})
-        if attrs.get("weekly_hours"):
-            attrs["weekly_hours"] = validate_week(attrs["weekly_hours"])
-        else:
-            attrs["weekly_hours"] = []
+        # Decision §22: no hours step in the wizard; a new machine is open every day 7–19 unless hours are sent.
+        attrs["weekly_hours"] = validate_week(attrs["weekly_hours"]) if attrs.get("weekly_hours") else default_week()
         return attrs
+
+
+class OptionsReplaceSerializer(serializers.Serializer):
+    """PUT /api/listings/{id}/options/: the whole price list at once (S21 Edit), all in one unit."""
+
+    options = serializers.ListField(child=serializers.DictField(), min_length=1, max_length=ListingOption.MAX_PER_LISTING)
+
+    def validate(self, attrs):
+        machine = self.context["machine_type"]
+        options, errors = [], {}
+        for i, raw in enumerate(attrs["options"]):
+            ser = OptionWriteSerializer(data=raw, context={"machine_type": machine})
+            if ser.is_valid():
+                options.append(ser.validated_data)
+            else:
+                errors[str(i)] = ser.errors
+        if errors:
+            raise serializers.ValidationError({"options": errors})
+        keys = [option_key(o) for o in options]
+        if len(keys) != len(set(keys)):
+            raise serializers.ValidationError({"options": "duplicate_option"})
+        one_unit(options)
+        return {"options": options}
 
 
 class ListingUpdateSerializer(ListingFieldsSerializer):

@@ -30,19 +30,42 @@ def test_tractor_with_two_attachments(me, owner):
     assert body["machine"]["code"] == "tractor"
     assert body["status"] == "active"
     assert body["operator_included"] is True
-    assert body["has_schedule"] is False and body["bookable"] is False
-    assert body["gap_hours"] == 1 and body["transport_included"] is True
+    # Decision §22: fixed terms, and bookable at once (every day 7–19).
+    assert body["gap_hours"] == 1 and body["transport_included"] is True and body["fuel_included"] is True
+    assert body["has_schedule"] is True and body["bookable"] is True
+    assert body["weekly_hours"] == [{"weekday": d, "start_hour": 7, "end_hour": 19} for d in range(7)]
     # The place is copied from the home address, including the private landmark (owner sees it).
     assert body["location"]["village"] == "झूंसी"
     assert body["location"]["landmark"] == "मंदिर के पास"
     opts = body["options"]
-    assert [(o["implement"] and o["implement"]["code"], o["price_unit"]) for o in opts] == [
-        (None, "hour"), ("rotavator", "hour"), ("rotavator", "acre"), ("cultivator", "hour"),
+    assert [(o["implement"] and o["implement"]["code"], o["price_unit"], o["price"]) for o in opts] == [
+        (None, "hour", "600.00"), ("rotavator", "hour", "900.00"), ("cultivator", "hour", "800.00"),
     ]
-    assert opts[0]["min_hours"] == 2
-    # Per acre without the owner's own value → the rotavator's default (05 §3.4a).
-    assert opts[2]["hours_per_acre"] == "1.5"
+    assert {o["min_hours"] for o in opts} == {1}
     assert Listing.objects.get().owner == owner
+
+
+def test_one_unit_per_machine(me):
+    """Decision §22: the owner picks the unit once; every price is in it."""
+    res = post(me, tractor_payload(options=[
+        {"price_unit": "hour", "price": "600"},
+        {"implement_id": mt("rotavator").id, "price_unit": "acre", "price": "1500"},
+    ]))
+    assert res.status_code == 400 and res.json()["error"]["fields"]["options"] == ["one_unit"]
+
+
+def test_per_acre_uses_the_default_hours(me):
+    res = post(me, tractor_payload(options=[
+        {"price_unit": "acre", "price": "1200", "hours_per_acre": "1.5"},
+        {"implement_id": mt("rotavator").id, "price_unit": "acre", "price": "1500"},
+    ]))
+    assert res.status_code == 201, res.json()
+    assert res.json()["options"][1]["hours_per_acre"] == "1.5"  # the rotavator's default (05 §3.4a)
+
+
+def test_minimum_hours_is_always_1(me):
+    res = post(me, tractor_payload(options=[{"price_unit": "hour", "price": "600", "min_hours": 3}]))
+    assert res.json()["options"][0]["min_hours"] == 1
 
 
 def test_operator_included_for_every_power_machine_and_never_for_implements(me):

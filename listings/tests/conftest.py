@@ -47,15 +47,15 @@ def me(api, owner):
 
 
 def tractor_payload(**extra):
-    """The roadmap's example: a tractor with 2 attachments."""
+    """The owner's example (decision §22): one unit for the whole machine, one price per row,
+    "ट्रैक्टर (सिर्फ़ मशीन) ₹600 / घंटा", "+ रोटावेटर ₹900 / घंटा", "+ कल्टीवेटर ₹800 / घंटा".
+    No fuel / transport / gap / minimum hours: those are fixed now."""
     body = {
         "machine_type_id": mt("tractor").id,
         "brand": "Mahindra", "model": "575 DI", "hp": 45, "year": 2019,
-        "fuel_included": False, "transport_included": True, "gap_hours": 1,
         "options": [
-            {"implement_id": None, "price_unit": "hour", "price": "600", "min_hours": 2},
-            {"implement_id": mt("rotavator").id, "price_unit": "hour", "price": "1000", "min_hours": 2},
-            {"implement_id": mt("rotavator").id, "price_unit": "acre", "price": "1500"},
+            {"implement_id": None, "price_unit": "hour", "price": "600"},
+            {"implement_id": mt("rotavator").id, "price_unit": "hour", "price": "900"},
             {"implement_id": mt("cultivator").id, "price_unit": "hour", "price": "800"},
         ],
     }

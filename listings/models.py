@@ -21,6 +21,9 @@ class Listing(models.Model):
         REMOVED = "removed", "हटाई गई"
 
     GAP_CHOICES = [(0, "No gap"), (1, "1 hour"), (2, "2 hours")]
+    # Owner, 2026-11-26 (decision §22): the wizard asks none of these any more; every listing gets them.
+    GAP_HOURS = 1                      # always 1 hour after each booking
+    DEFAULT_HOURS = (7, 19)            # every day, सुबह 7 बजे से शाम 7 बजे तक, so a new machine is bookable at once
     MAX_PHOTOS = 5
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="listings")

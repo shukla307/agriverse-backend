@@ -22,7 +22,10 @@
     `transport_included` null = doesn't apply; `operator_included` computed from the type, or `operator_answer` for
     अन्य; `apply_settings()` keeps only what the type asks), `ListingOption` (attachment + unit + price; inactive = removed, kept for
     bookings), `Photo` (0–5, first = cover), `WeeklyHours` (sets `has_schedule`; bookable = active + schedule).
-    All rules in `serializers.py`. Admin: **"new machine types to add"** (proxy `NewTypeRequest`) + action
+    All rules in `serializers.py`. **Decision §22 (2026-11-26):** `apply_settings()` ignores fuel / transport / gap from apps
+    (included where they apply, gap 1), `min_hours` always 1, ONE price unit per listing (`one_unit()`,
+    `check_same_unit()`), `PUT …/options/` = the whole list (ids kept for same attachment + unit), a new listing gets
+    hours 7–19 (`Listing.DEFAULT_HOURS`). Migration `0005_simple_terms` moved old rows (tested on old-style data). Admin: **"new machine types to add"** (proxy `NewTypeRequest`) + action
     "Move to a real machine type" (`moving.py`). The machine type can't change after create (decision §18).
   - `bookings/` (Phase 5): `Booking` (+ `BookingEvent` history). The DATABASE refuses two active bookings on one
     listing whose `[start_at, blocked_until)` overlap (btree_gist exclusion constraint; Postgres only).

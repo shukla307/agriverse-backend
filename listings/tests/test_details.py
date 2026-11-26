@@ -11,7 +11,7 @@ from rest_framework.test import APIClient
 from accounts.models import User
 from listings.models import Listing, ListingOption
 
-from .conftest import photo
+from .conftest import mt, tractor_payload, photo
 
 
 @pytest.fixture
@@ -56,7 +56,7 @@ def test_renter_view(renter, full_listing):
     assert body["machine"]["code"] == "tractor" and body["brand"] == "Mahindra" and body["hp"] == 45
     assert body["year"] == 2019 and body["status"] == "active" and body["bookable"] is True
     assert body["operator_included"] is True and body["transport_included"] is True
-    assert body["fuel_included"] is False and body["gap_hours"] == 1
+    assert body["fuel_included"] is True and body["gap_hours"] == 1  # fixed terms (decision §22)
     assert body["village"] == "झूंसी"
     assert [p["url"].split("%2F")[-1].split("?")[0] for p in body["photos"]] == ["a_full.jpg", "b_full.jpg"]
     assert set(body["photos"][0]) == {"url", "thumb_url"}
@@ -67,16 +67,22 @@ def test_renter_view(renter, full_listing):
     assert body["distance_km"] is None  # no point sent
 
 
-def test_prices_active_only_with_hours_per_acre_for_acre(renter, me, full_listing):
+def test_prices_active_only(renter, me, full_listing):
     removed = full_listing.options.get(implement__code="cultivator")
     assert me.delete(f"/api/listings/{full_listing.id}/options/{removed.id}/").status_code == 204
     options = details(renter, full_listing.id)["options"]
-    assert len(options) == 3 and removed.id not in [o["id"] for o in options]
-    acre = next(o for o in options if o["price_unit"] == "acre")
-    assert acre["implement"]["code"] == "rotavator" and acre["price"] == "1500.00"
-    assert acre["hours_per_acre"] == "1.5"  # rotavator's default (05 §3.4a), owner left it empty
-    hour = next(o for o in options if o["price_unit"] == "hour" and o["implement"] is None)
-    assert hour["min_hours"] == 2 and hour["hours_per_acre"] is None
+    assert len(options) == 2 and removed.id not in [o["id"] for o in options]
+    hour = next(o for o in options if o["implement"] is None)
+    assert hour["min_hours"] == 1 and hour["hours_per_acre"] is None
+
+
+def test_acre_prices_show_the_effective_hours_per_acre(renter, me):
+    lid = me.post("/api/listings/", tractor_payload(options=[
+        {"price_unit": "acre", "price": "1200", "hours_per_acre": "2"},
+        {"implement_id": mt("rotavator").id, "price_unit": "acre", "price": "1500"},
+    ]), format="json").json()["id"]
+    options = details(renter, lid)["options"]
+    assert [o["hours_per_acre"] for o in options] == ["2.0", "1.5"]  # owner's own; rotavator's default (05 §3.4a)
 
 
 def test_privacy(renter, full_listing, owner):
@@ -115,10 +121,17 @@ def test_paused_opens_with_its_status(renter, me, full_listing):
     assert body["status"] == "paused" and body["bookable"] is False
 
 
-def test_not_bookable_without_hours(renter, listing_id):
-    """Owner chose "बाद में" in the wizard: no hours yet. (An empty week can't be PUT: at least one day.)"""
+def test_a_new_machine_is_bookable_at_once(renter, listing_id):
+    """Decision §22: no hours step in the wizard; every new machine is open every day 7–19."""
     body = details(renter, listing_id)
-    assert body["bookable"] is False and body["weekly_hours"] == []
+    assert body["bookable"] is True
+    assert body["weekly_hours"] == [{"weekday": d, "start_hour": 7, "end_hour": 19} for d in range(7)]
+
+
+def test_not_bookable_without_hours(renter, listing_id):
+    """Only possible for data from before decision §22 (the migration gives them hours too)."""
+    Listing.objects.filter(pk=listing_id).update(has_schedule=False)
+    assert details(renter, listing_id)["bookable"] is False
 
 
 @pytest.mark.parametrize("how", ["removed", "owner_disabled", "missing"])

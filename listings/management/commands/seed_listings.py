@@ -61,22 +61,26 @@ class Command(BaseCommand):
                 listings.append(Listing(
                     owner=rng.choice(owners),
                     machine_type=machine,
-                    # Only the answers this machine asks (catalogue settings); the rest stay null = no badge.
-                    fuel_included=(rng.random() < 0.3) if machine.fuel not in ("battery", "none") else None,
-                    transport_included=(rng.random() < 0.7) if machine.asks_transport else None,
+                    # Fixed terms (decision §22): fuel and transport included where they apply, gap 1 hour.
+                    fuel_included=True if machine.fuel not in ("battery", "none") else None,
+                    transport_included=True if machine.asks_transport else None,
+                    gap_hours=Listing.GAP_HOURS,
                     lat=Decimal(f"{lat:.6f}"), lng=Decimal(f"{lng:.6f}"), village=f"गाँव {i}",
                     hp=None if standalone else rng.choice([None, 30, 45, 55]),
-                    has_schedule=rng.random() < 0.7,
+                    has_schedule=True,  # every new machine gets hours 7–19 (decision §22)
                     status=Listing.Status.ACTIVE if rng.random() < 0.9 else Listing.Status.PAUSED,
                 ))
             Listing.objects.bulk_create(listings)
             options, photos, hours = [], [], []
             for listing in listings:
-                options.append(ListingOption(listing=listing, price_unit="hour", price=Decimal(rng.randrange(400, 1200, 50))))
+                # One unit per machine (decision §22): hour, or acre for some tractors.
+                unit = "acre" if listing.machine_type.takes_attachments and rng.random() < 0.3 else "hour"
+                options.append(ListingOption(listing=listing, price_unit=unit, price=Decimal(rng.randrange(400, 1200, 50)),
+                                             hours_per_acre=Decimal("1.5") if unit == "acre" else None))
                 # Only tractors pull attachments (catalogue setting takes_attachments).
                 if listing.machine_type.takes_attachments:
-                    for imp in rng.sample(attachable, k=rng.randint(0, 3)):
-                        unit = "acre" if imp.acre_price else "hour"
+                    usable = [a for a in attachable if unit != "acre" or a.acre_price]
+                    for imp in rng.sample(usable, k=rng.randint(0, 3)):
                         options.append(ListingOption(listing=listing, implement=imp, price_unit=unit,
                                                      price=Decimal(rng.randrange(800, 2500, 100))))
                 for s in range(rng.randint(0, 3)):
@@ -84,7 +88,8 @@ class Command(BaseCommand):
                                         thumb_url="https://example.com/t.jpg", storage_path=f"seed/{listing.pk}/{s}",
                                         sort_order=s))
                 if listing.has_schedule:
-                    hours += [WeeklyHours(listing=listing, weekday=d, start_hour=6, end_hour=18) for d in range(7)]
+                    start, end = Listing.DEFAULT_HOURS
+                    hours += [WeeklyHours(listing=listing, weekday=d, start_hour=start, end_hour=end) for d in range(7)]
             ListingOption.objects.bulk_create(options)
             Photo.objects.bulk_create(photos)
             WeeklyHours.objects.bulk_create(hours)

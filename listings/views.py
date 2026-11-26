@@ -27,6 +27,7 @@ from .serializers import (
     ListingUpdateSerializer,
     OptionReadSerializer,
     OptionWriteSerializer,
+    OptionsReplaceSerializer,
     PhotoOrderSerializer,
     PhotoReadSerializer,
     PhotoWriteSerializer,
@@ -162,8 +163,36 @@ def check_not_duplicate(listing: Listing, data: dict, *, except_id=None):
         raise ApiError("validation_error", fields={"options": "duplicate_option"})
 
 
+def check_same_unit(listing: Listing, unit: str, *, except_id=None):
+    """Decision §22: one price unit per machine. To switch units, PUT the whole price list."""
+    others = set(listing.options.filter(is_active=True).exclude(pk=except_id).values_list("price_unit", flat=True))
+    if others and others != {unit}:
+        raise ApiError("validation_error", fields={"price_unit": "one_unit"})
+
+
 class OptionListView(APIView):
-    """POST /api/listings/{id}/options/"""
+    """POST /api/listings/{id}/options/ (one price, in the machine's unit)
+    PUT  /api/listings/{id}/options/ (the whole price list at once; S21 Edit, also to switch the unit)"""
+
+    def put(self, request, pk):
+        with transaction.atomic():
+            listing = my_listing(request, pk, lock=True)
+            ser = OptionsReplaceSerializer(data=request.data, context={"machine_type": listing.machine_type})
+            ser.is_valid(raise_exception=True)
+            current = {option_key(o): o for o in listing.options.filter(is_active=True)}
+            wanted = {option_key(o): o for o in ser.validated_data["options"]}
+            # Same attachment + unit: changed in place, so its id stays (an open S11 still sends a valid id).
+            for key, data in wanted.items():
+                if key in current:
+                    o = current[key]
+                    o.price, o.hours_per_acre, o.min_hours = data["price"], data["hours_per_acre"], 1
+                    o.save(update_fields=["price", "hours_per_acre", "min_hours"])
+            # Dropped ones are switched off, never deleted: bookings keep pointing at them.
+            listing.options.filter(pk__in=[o.pk for k, o in current.items() if k not in wanted]).update(is_active=False)
+            ListingOption.objects.bulk_create(
+                ListingOption(listing=listing, **data) for key, data in wanted.items() if key not in current
+            )
+        return Response(owner_view(listing.pk))
 
     def post(self, request, pk):
         with transaction.atomic():
@@ -171,6 +200,7 @@ class OptionListView(APIView):
             ser = OptionWriteSerializer(data=request.data, context={"machine_type": listing.machine_type})
             ser.is_valid(raise_exception=True)
             check_not_duplicate(listing, ser.validated_data)
+            check_same_unit(listing, ser.validated_data["price_unit"])
             if listing.options.filter(is_active=True).count() >= ListingOption.MAX_PER_LISTING:
                 raise ApiError("validation_error", fields={"options": "too_many_options"})
             option = ListingOption.objects.create(listing=listing, **ser.validated_data)
@@ -203,6 +233,7 @@ class OptionDetailView(APIView):
             ser = OptionWriteSerializer(data={**current, **incoming}, context={"machine_type": listing.machine_type})
             ser.is_valid(raise_exception=True)
             check_not_duplicate(listing, ser.validated_data, except_id=option.pk)
+            check_same_unit(listing, ser.validated_data["price_unit"], except_id=option.pk)
             # Bookings keep their own price snapshot (Phase 5), so editing only affects new bookings.
             for field, value in ser.validated_data.items():
                 setattr(option, field, value)

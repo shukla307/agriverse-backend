@@ -23,7 +23,7 @@ def test_mine_lists_my_active_and_paused_newest_first(me, stranger, api):
     assert [r["id"] for r in body["results"]] == [second, first]
     card = body["results"][0]
     assert card["cover_thumb_url"].endswith("a_thumb.jpg?alt=media&token=t")
-    assert card["options_count"] == 4
+    assert card["options_count"] == 3
     assert card["next_booking"] is None and card["pending_requests_count"] == 0
     assert body["results"][1]["status"] == "paused"
     assert body["results"][1]["cover_thumb_url"] is None  # the app shows the machine's icon
@@ -71,7 +71,8 @@ def test_someone_elses_listing_parts_are_404(api, me, owner, stranger, listing_i
     api.force_authenticate(stranger)
     base = f"/api/listings/{listing_id}"
     calls = [
-        api.post(f"{base}/options/", {"price_unit": "day", "price": "1"}, format="json"),
+        api.post(f"{base}/options/", {"price_unit": "hour", "price": "1"}, format="json"),
+        api.put(f"{base}/options/", {"options": [{"price_unit": "hour", "price": "1"}]}, format="json"),
         api.patch(f"{base}/options/{oid}/", {"price": "1"}, format="json"),
         api.delete(f"{base}/options/{oid}/"),
         api.post(f"{base}/photos/", photo(uid="uid-stranger"), format="json"),
@@ -82,12 +83,13 @@ def test_someone_elses_listing_parts_are_404(api, me, owner, stranger, listing_i
     assert [c.status_code for c in calls] == [404] * len(calls)
     api.force_authenticate(owner)  # (me and api are the same test client)
     me_view = me.get(f"/api/listings/{listing_id}/").json()
-    assert len(me_view["options"]) == 4 and len(me_view["photos"]) == 1 and me_view["has_schedule"] is False
+    assert len(me_view["options"]) == 3 and len(me_view["photos"]) == 1
+    assert me_view["weekly_hours"][0] == {"weekday": 0, "start_hour": 7, "end_hour": 19}  # unchanged
 
 
 def test_owner_gets_the_full_listing(me, listing_id):
     body = me.get(f"/api/listings/{listing_id}/").json()
-    assert body["id"] == listing_id and len(body["options"]) == 4
+    assert body["id"] == listing_id and len(body["options"]) == 3
 
 
 def test_patch_fields_and_pause_resume(me, listing_id):
@@ -95,7 +97,8 @@ def test_patch_fields_and_pause_resume(me, listing_id):
                                                    "transport_included": False, "status": "paused"}, format="json")
     body = res.json()
     assert res.status_code == 200
-    assert (body["brand"], body["hp"], body["gap_hours"], body["transport_included"]) == ("Swaraj", 50, 2, False)
+    # Gap and transport are fixed (decision §22): an old app sending them changes nothing.
+    assert (body["brand"], body["hp"], body["gap_hours"], body["transport_included"]) == ("Swaraj", 50, 1, True)
     assert body["status"] == "paused" and body["bookable"] is False
     assert me.patch(f"/api/listings/{listing_id}/", {"status": "active"}, format="json").json()["status"] == "active"
 
