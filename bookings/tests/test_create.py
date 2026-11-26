@@ -286,7 +286,7 @@ class TestReadOne:
     def test_renter_and_owner_see_it_without_contact_details(self, as_renter, tractor, owner):
         pk = self.make(as_renter, tractor)
         j = as_renter.get(f"{URL}{pk}/").json()
-        assert j["owner"] == {"name": "Ramesh"} and j["renter"] == {"name": "Suresh"}
+        assert j["owner"] == {"name": "Ramesh"} and j["renter"] == {"name": "Suresh", "village": "सोरांव"}  # S17
         assert "contact" not in j
         text = str(j)
         for secret in ("+91", "पुल के पास", "मंदिर के पास", "25.51"):

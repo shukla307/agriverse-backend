@@ -13,6 +13,7 @@ from rest_framework import serializers
 from accounts.models import Address
 from catalog.models import JobCategory
 from listings.models import Listing
+from listings.search import haversine_km
 
 from .availability import IST
 from .models import Booking
@@ -61,6 +62,33 @@ class CreateSerializer(QuoteSerializer):
         return attrs
 
 
+class ActionSerializer(serializers.Serializer):
+    """accept / reject / cancel / complete (06 §8): a reason chip; "other" (कोई और वजह) needs a few words."""
+
+    reason = serializers.ChoiceField(choices=Booking.Reason.choices, required=False, allow_blank=True, default="")
+    reason_other = serializers.CharField(max_length=60, required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        other = attrs["reason_other"].strip()
+        if attrs["reason"] == Booking.Reason.OTHER and not other:
+            raise serializers.ValidationError({"reason_other": "required"})
+        attrs["reason_other"] = other if attrs["reason"] == Booking.Reason.OTHER else ""
+        return attrs
+
+
+class ListParams(serializers.Serializer):
+    """GET /api/bookings/?role=owner|renter&status=requested,accepted"""
+
+    role = serializers.ChoiceField(choices=["owner", "renter"])
+    status = serializers.CharField(required=False, default="")
+
+    def validate_status(self, raw):
+        wanted = [x for x in raw.split(",") if x]
+        if any(x not in Booking.Status.values for x in wanted):
+            raise serializers.ValidationError("unknown")
+        return wanted
+
+
 # --------------------------------------------------------------------- out
 
 
@@ -77,9 +105,20 @@ def first_name(user) -> str:
     return words[0] if words else ""
 
 
+def home_village(user) -> str:
+    home = user.home_address
+    return home.village if home and not home.is_deleted else ""
+
+
+def field_km(b: Booking) -> float:
+    """From the machine's place to the field, rounded to 0.1 km (the same formula as search)."""
+    return round(haversine_km((float(b.listing.lat), float(b.listing.lng)), (float(b.field_lat), float(b.field_lng))), 1)
+
+
 def machine_json(listing: Listing) -> dict:
     m = listing.machine_type
-    cover = listing.photos.order_by("sort_order", "id").first()
+    # Sorted in Python: .order_by() would skip the list's prefetch and cost one query per card.
+    cover = min(listing.photos.all(), key=lambda p: (p.sort_order, p.id), default=None)
     return {
         "id": listing.pk,
         "machine": {"code": m.code, "name_hi": m.name_hi, "kind": m.kind, "icon": m.icon},
@@ -117,9 +156,10 @@ def booking_json(b: Booking, group: list[Booking] | None = None) -> dict:
         "estimated_total": None if any(t is None for t in totals) else money(sum(totals)),
         "days": [{"id": x.pk, "start_at": ist(x.start_at), "end_at": ist(x.end_at)} for x in shown]
         if b.group_id else [],
-        "renter": {"name": first_name(b.renter)},
+        "renter": {"name": first_name(b.renter), "village": home_village(b.renter)},
         "owner": {"name": first_name(b.listing.owner)},
-        "field": {"village": b.field_village},
+        # Village + rounded distance only: the exact pin waits for acceptance (S17 "how far is the field?").
+        "field": {"village": b.field_village, "distance_km": field_km(b)},
         "expires_at": ist(b.expires_at),
         "reason": b.reason,
         "reason_other": b.reason_other,

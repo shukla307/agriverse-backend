@@ -23,6 +23,7 @@ from rest_framework import status
 from core.errors import ApiError
 from listings.models import Listing, ListingOption
 
+from .actions import expire_overdue
 from .availability import IST, Plan, at, expires_at_for, hour_of, hours_for, load_plan, next_whole_hour, window
 from .models import Booking, BookingEvent
 
@@ -140,12 +141,7 @@ def per_day_slots(plan: Plan, days: list[date], start_at: datetime) -> list[Slot
 def expire_stale(listing: Listing, now: datetime) -> int:
     """Lazy expiry (05 §5): requests past their answer time stop holding the machine, before anything new is
     written. Each gets its history row. The push to the renter comes with notifications (slice 6)."""
-    stale = list(Booking.objects.filter(listing=listing, status=Booking.Status.REQUESTED, expires_at__lte=now))
-    for b in stale:
-        b.status = Booking.Status.EXPIRED
-        b.save(update_fields=["status"])
-        BookingEvent.objects.create(booking=b, from_status=Booking.Status.REQUESTED, to_status=Booking.Status.EXPIRED)
-    return len(stale)
+    return len(expire_overdue(Booking.objects.filter(listing=listing), now))
 
 
 def create(*, renter, option: ListingOption, start_at: datetime, quantity: Decimal, job, job_other: str,

@@ -9,4 +9,5 @@ urlpatterns = [
     path("bookings/quote/", views.QuoteView.as_view(), name="booking-quote"),
     path("bookings/", views.BookingsView.as_view(), name="bookings"),
     path("bookings/<int:pk>/", views.BookingDetailView.as_view(), name="booking-detail"),
+    path("bookings/<int:pk>/<str:action>/", views.BookingActionView.as_view(), name="booking-action"),
 ]

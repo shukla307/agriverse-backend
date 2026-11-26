@@ -6,7 +6,10 @@ Availability (docs/06-api.md §6) and booking requests (06 §8, Phase 5 slice 3)
   PUT/DELETE /api/listings/{id}/days/{date}/            S15 step 2: close one date / change its hours / undo
   POST       /api/bookings/quote/                        check a time + the estimate; holds nothing
   POST       /api/bookings/                              S11 "बुकिंग भेजें": the locked check, then the request
-  GET        /api/bookings/{id}/                         the renter or the owner of that booking (S12, …)
+  GET        /api/bookings/?role=owner|renter&status=    S16 "मेरे पास आई बुकिंग" (+ its count for the badge
+                                                         and the Home banner); the renter's list (slice 5)
+  GET        /api/bookings/{id}/                         the renter or the owner of that booking (S12, S17, …)
+  POST       /api/bookings/{id}/accept|reject|cancel|complete/   slice 4 (actions.py)
 
 Renters see only hours. The owner also sees which booking holds each hour and which days they changed.
 """
@@ -14,7 +17,7 @@ Renters see only hours. The owner also sees which booking holds each hour and wh
 from datetime import date, timedelta
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Case, Exists, F, IntegerField, OuterRef, Q, Value, When
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers, status
@@ -24,12 +27,14 @@ from rest_framework.views import APIView
 from core.errors import ApiError
 from listings.models import DayOverride, Listing, ListingOption
 from listings.serializers import WeeklyHoursSerializer
+from core.pagination import Pages
 from listings.views import my_listing
 
+from . import actions
 from . import requests as booking_requests
 from .availability import Plan, bookings_outside, hours_for, load_plan, window
 from .models import Booking
-from .serializers import CreateSerializer, QuoteSerializer, booking_json, ist, money
+from .serializers import ActionSerializer, CreateSerializer, ListParams, QuoteSerializer, booking_json, ist, money
 
 
 def visible_listing(pk) -> Listing:
@@ -253,6 +258,43 @@ class QuoteView(APIView):
 class BookingsView(APIView):
     throttle_scope = "bookings"
 
+    def get_throttles(self):  # the throttle is for sending requests, not for reading the list
+        return super().get_throttles() if self.request.method == "POST" else []
+
+    def get(self, request):
+        params = ListParams(data=request.query_params)
+        params.is_valid(raise_exception=True)
+        p = params.validated_data
+        mine = Q(listing__owner=request.user) if p["role"] == "owner" else Q(renter=request.user)
+        now = timezone.now()
+        actions.expire_overdue(Booking.objects.filter(mine), now)  # lazy expiry: the list never shows a dead request
+        qs = Booking.objects.filter(mine).exclude(  # a per-day group shows once, as its first day
+            Exists(Booking.objects.filter(group_id=OuterRef("group_id"), start_at__lt=OuterRef("start_at")))
+        )
+        if p["status"]:
+            qs = qs.filter(status__in=p["status"])
+        qs = (
+            qs.annotate(
+                waiting=Case(When(status=Booking.Status.REQUESTED, then=Value(0)), default=Value(1),
+                             output_field=IntegerField()),
+                # Requests to answer: the one whose answer time ends first on top (emulator, slice 4: a
+                # newer request for Saturday sat above tomorrow's, which had only 2 hours left).
+                answer_by=Case(When(status=Booking.Status.REQUESTED, then=F("expires_at")), default=None),
+            )
+            .select_related("listing__machine_type", "listing__owner", "option__implement",
+                            "renter__home_address", "job")
+            .prefetch_related("events", "listing__photos")
+            .order_by("waiting", "answer_by", "-created_at", "-id")  # 06 §8 + soonest answer time first
+        )
+        pages = Pages()
+        page = pages.paginate_queryset(qs, request, view=self)
+        groups: dict = {}
+        for g in Booking.objects.filter(group_id__in={b.group_id for b in page if b.group_id}):
+            groups.setdefault(g.group_id, []).append(g)
+        return pages.get_paginated_response(
+            [booking_json(b, group=groups.get(b.group_id) if b.group_id else None) for b in page]
+        )
+
     def post(self, request):
         ser = CreateSerializer(data=request.data, context={"request": request})
         ser.is_valid(raise_exception=True)
@@ -268,7 +310,7 @@ class BookingsView(APIView):
 
 def full_booking(pk) -> Booking:
     return Booking.objects.select_related(
-        "listing__machine_type", "listing__owner", "option__implement", "renter", "job"
+        "listing__machine_type", "listing__owner", "option__implement", "renter__home_address", "job"
     ).prefetch_related("events").get(pk=pk)
 
 
@@ -277,6 +319,21 @@ class BookingDetailView(APIView):
         b = get_object_or_404(
             Booking.objects.filter(Q(renter=request.user) | Q(listing__owner=request.user)), pk=pk
         )  # anyone else: 404, so ids can't be probed (06 §1)
+        actions.expire_overdue(Booking.objects.filter(listing_id=b.listing_id), timezone.now())
+        b = full_booking(b.pk)
+        group = list(Booking.objects.filter(group_id=b.group_id)) if b.group_id else None
+        return Response(booking_json(b, group=group))
+
+
+class BookingActionView(APIView):
+    """POST /api/bookings/{id}/accept|reject|cancel|complete/ → the updated booking (06 §8, actions.py)."""
+
+    def post(self, request, pk, action):
+        if action not in actions.ACTIONS:
+            raise ApiError("not_found", status.HTTP_404_NOT_FOUND)
+        ser = ActionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        b = actions.act(booking_id=pk, user=request.user, action=action, **ser.validated_data)
         b = full_booking(b.pk)
         group = list(Booking.objects.filter(group_id=b.group_id)) if b.group_id else None
         return Response(booking_json(b, group=group))
