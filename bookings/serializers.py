@@ -11,7 +11,6 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from accounts.models import Address
-from catalog.models import JobCategory
 from listings.models import Listing
 from listings.search import haversine_km
 
@@ -23,9 +22,11 @@ LNG = dict(max_digits=9, decimal_places=6, min_value=Decimal(Address.LNG_MIN), m
 
 
 class QuoteSerializer(serializers.Serializer):
+    """Decision §23: one price, a start hour, whole hours (never acres or days)."""
+
     option_id = serializers.IntegerField()
     start_at = serializers.DateTimeField()
-    quantity = serializers.DecimalField(max_digits=5, decimal_places=1)
+    hours = serializers.IntegerField()
 
 
 class FieldSerializer(serializers.Serializer):
@@ -50,16 +51,9 @@ class FieldSerializer(serializers.Serializer):
 
 
 class CreateSerializer(QuoteSerializer):
-    job = serializers.SlugRelatedField(slug_field="code", queryset=JobCategory.objects.filter(is_active=True))
-    job_other = serializers.CharField(max_length=60, required=False, allow_blank=True, default="")
-    field = FieldSerializer()
+    """The job is NOT sent: the server takes it from the machine (decision §23, requests.auto_job)."""
 
-    def validate(self, attrs):
-        other = attrs["job_other"].strip()
-        if attrs["job"].code == "other" and not other:  # अन्य needs a name (decision §14)
-            raise serializers.ValidationError({"job_other": "required"})
-        attrs["job_other"] = other if attrs["job"].code == "other" else ""
-        return attrs
+    field = FieldSerializer()
 
 
 class ActionSerializer(serializers.Serializer):

@@ -206,7 +206,8 @@ def test_with_photos_and_weekly_hours(me):
     assert [p["sort_order"] for p in body["photos"]] == [0, 1]
     assert body["photos"][0]["storage_path"].endswith("a_full.jpg")
     assert body["has_schedule"] is True and body["bookable"] is True
-    assert len(body["weekly_hours"]) == 7
+    # Decision §23: an old app's own hours are ignored; every machine is every day 7–19.
+    assert body["weekly_hours"] == [{"weekday": d, "start_hour": 7, "end_hour": 19} for d in range(7)]
 
 
 def test_six_photos_refused(me):

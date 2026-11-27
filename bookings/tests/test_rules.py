@@ -1,49 +1,52 @@
 """Booking length and expiry rules, without the API (decision §12, §21)."""
 
 from datetime import datetime, timedelta, timezone as tz
-from decimal import Decimal
 
 import pytest
 
-from bookings.availability import IST, at, expires_at_for, hour_of, hours_for, next_whole_hour
+from bookings.availability import IST, at, check_hours, expires_at_for, hour_of, load_plan, next_whole_hour
 from core.errors import ApiError
 
-from .conftest import MON, TUE, WED
+from .conftest import MON, TUE, WED, book, set_week
 
 NOW = datetime(2026, 11, 23, 2, 0, tzinfo=tz.utc)  # 07:30 IST
 
 
-class TestHoursFor:
-    def test_hours_are_the_quantity(self, tractor):
-        assert hours_for(tractor.opt_hour, Decimal("3")) == 3
+class TestWholeHours:
+    """Decision §23: renters always book whole hours, whatever the price unit (acres / days are price only)."""
 
-    def test_below_the_owners_minimum_is_refused(self, tractor):
-        with pytest.raises(ApiError) as e:
-            hours_for(tractor.opt_hour, Decimal("1"))  # min 2
-        assert e.value.error_code == "below_min_hours"
+    @pytest.mark.parametrize("hours", [1, 2, 12])
+    def test_whole_hours(self, hours):
+        assert check_hours(hours) == hours
 
-    def test_half_hours_are_refused(self, tractor):
-        with pytest.raises(ApiError) as e:
-            hours_for(tractor.opt_hour, Decimal("2.5"))
-        assert e.value.error_code == "validation_error"
-
-    def test_acres_times_hours_per_acre_rounded_up(self, tractor):
-        # The roadmap's case: 2.5 acres × 1.5 h = 3.75 → 4 hours.
-        assert hours_for(tractor.opt_acre, Decimal("2.5")) == 4
-        assert hours_for(tractor.opt_acre, Decimal("2")) == 3  # exactly 3.0 stays 3
-
-    def test_acres_only_in_half_steps(self, tractor):
+    @pytest.mark.parametrize("hours", [0, 13, -1, 2.5])
+    def test_anything_else_is_refused(self, hours):
         with pytest.raises(ApiError):
-            hours_for(tractor.opt_acre, Decimal("2.3"))
+            check_hours(hours)
 
-    def test_acres_fall_back_to_the_attachments_default(self, tractor):
-        tractor.opt_acre.hours_per_acre = None  # rotavator default = 1.5
-        assert hours_for(tractor.opt_acre, Decimal("1")) == 2
 
-    def test_days_reserve_each_days_open_hours(self, tractor):
-        assert hours_for(tractor.opt_day, Decimal("2")) is None
-        with pytest.raises(ApiError):
-            hours_for(tractor.opt_day, Decimal("1.5"))
+class TestMaxHours:
+    """S11 "कितने घंटे?": from a start, until 7 PM or the next booking (keeping this job's 1-hour rest gap)."""
+
+    def plan(self, tractor, now=None):
+        set_week(tractor, 7, 19)
+        return load_plan(tractor, TUE, TUE, now or at(MON, 7))
+
+    def test_until_closing_time(self, tractor):
+        p = self.plan(tractor)
+        assert p.max_hours(TUE, 7) == 12 and p.max_hours(TUE, 17) == 2 and p.max_hours(TUE, 18) == 1
+
+    def test_until_the_next_booking_minus_the_rest_gap(self, tractor, renter):
+        book(tractor, tractor.opt_hour, renter, TUE, 12, 14)  # reserves 12–15
+        p = self.plan(tractor)
+        assert p.max_hours(TUE, 8) == 3  # 8–11, rest 11–12, then the booking
+        assert p.max_hours(TUE, 11) == 0  # 11–12 + rest would touch 12
+        assert p.max_hours(TUE, 15) == 4  # after the booking's own rest hour: until 19
+
+    def test_outside_the_day_or_past(self, tractor):
+        p = self.plan(tractor, now=at(TUE, 9) + timedelta(minutes=10))
+        assert p.max_hours(TUE, 6) == 0 and p.max_hours(TUE, 19) == 0
+        assert p.max_hours(TUE, 9) == 0 and p.max_hours(TUE, 10) == 9  # 9 has started
 
 
 class TestExpiry:

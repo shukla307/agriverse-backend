@@ -101,9 +101,6 @@ def as_owner(api, owner):
     return api
 
 
-def starts(client, listing, option, day, quantity):
-    res = client.get(
-        f"/api/listings/{listing.pk}/start-times/",
-        {"option_id": option.pk, "date": day.isoformat(), "quantity": str(quantity)},
-    )
-    return res
+def starts(client, listing, day):
+    """S11's start times + how long a job from each may last (decision §23)."""
+    return client.get(f"/api/listings/{listing.pk}/start-times/", {"date": day.isoformat()})

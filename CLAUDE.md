@@ -40,6 +40,12 @@
     `serializers.py` `booking_json()` (IST "+05:30" times; `contact` only when accepted/completed). The concurrency test
     is `transaction=True, serialized_rollback=True` (keeps the seeded catalogue). Tests freeze time at
     Mon 2026-11-23 07:30 IST (`freezegun`, dev only). `DayOverride` lives in `listings/` next to WeeklyHours.
+    **Decision §23 (2026-11-27): fixed hours + booking in hours.** Migration `listings 0006_fixed_hours` = every
+    machine every day 7–19; `WeekSerializer` accepts only that (else 400 `fixed_hours`), create ignores sent hours,
+    `DayView` may only close a day. Bookings: `{option_id, start_at, hours}` (1–12, `availability.check_hours`), no job
+    (`requests.auto_job`: the attachment's first job, else the machine's), one row; estimate only per hour.
+    `start-times/?date` → `{start_hours, max_hours, next_free_date}` (`Plan.max_hours`). `hours_for` / `day_free` /
+    per-day groups are gone from new bookings (old group rows still read fine).
     **Owner answers (slice 4):** `actions.py` = `RULES` (who may accept / reject / cancel / complete, from which status;
     tested row by row) + `act()` (listing lock, `expire_overdue()` first, a per-day group changes together, refusals raised
     AFTER the transaction so the expiry is kept) + `complete_done()` (accepted, 12 h after the end). `expire_overdue(qs, now)`

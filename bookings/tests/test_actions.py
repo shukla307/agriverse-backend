@@ -127,7 +127,7 @@ class TestAccept:
         b.refresh_from_db()
         assert b.status == "expired"
         assert list(b.events.values_list("to_status", flat=True)) == ["expired"]
-        assert 8 in starts(client(renter), tractor, tractor.opt_hour, TUE, 3).json()["start_hours"]
+        assert 8 in starts(client(renter), tractor, TUE).json()["start_hours"]
 
     def test_reject_needs_a_reason(self, as_owner, tractor, renter):
         b = waiting(tractor, renter)
@@ -150,7 +150,7 @@ class TestAccept:
     def test_rejected_time_is_free_again(self, as_owner, tractor, renter):
         b = waiting(tractor, renter)
         as_owner.post(url(b, "reject"), {"reason": "busy"}, format="json")
-        assert 8 in starts(client(renter), tractor, tractor.opt_hour, TUE, 3).json()["start_hours"]
+        assert 8 in starts(client(renter), tractor, TUE).json()["start_hours"]
 
     def test_owner_cancel_needs_a_reason(self, as_owner, tractor, renter):
         b = book(tractor, tractor.opt_hour, renter, TUE, 8, 11)
@@ -282,7 +282,7 @@ class TestJobs:
         assert b.status == "expired"
         e = b.events.get()
         assert (e.from_status, e.to_status, e.actor_id) == ("requested", "expired", None)
-        assert 8 in starts(as_renter, tractor, tractor.opt_hour, TUE, 3).json()["start_hours"]
+        assert 8 in starts(as_renter, tractor, TUE).json()["start_hours"]
 
     def test_completes_12_hours_after_the_work(self, tractor, renter, frozen):
         b = book(tractor, tractor.opt_hour, renter, MON, 8, 11)

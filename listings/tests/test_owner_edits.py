@@ -78,7 +78,8 @@ def test_someone_elses_listing_parts_are_404(api, me, owner, stranger, listing_i
         api.post(f"{base}/photos/", photo(uid="uid-stranger"), format="json"),
         api.patch(f"{base}/photos/order/", {"photo_ids": [pid]}, format="json"),
         api.delete(f"{base}/photos/{pid}/"),
-        api.put(f"{base}/weekly-hours/", {"days": [{"weekday": 0, "start_hour": 6, "end_hour": 7}]}, format="json"),
+        api.put(f"{base}/weekly-hours/", {"days": [{"weekday": d, "start_hour": 7, "end_hour": 19} for d in range(7)]},
+                format="json"),
     ]
     assert [c.status_code for c in calls] == [404] * len(calls)
     api.force_authenticate(owner)  # (me and api are the same test client)

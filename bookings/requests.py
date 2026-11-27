@@ -1,6 +1,10 @@
 """
 Sending a booking request (Phase 5 slice 3; docs/05-data-model.md §5 layer 2, 06 §8).
 
+    Decision §23 (owner, 2026-11-27): a booking is ONE price (machine alone, or machine + one attachment), a start
+    hour and whole hours. Acres and days are the owner's price only (the final price is agreed on the phone), and
+    the job comes from the machine (auto_job), not from the renter.
+
     check()   what the renter asks for → the exact rows to reserve, or an ApiError. Used by quote/ (no lock,
               nothing held) and by create() (under the lock, so the answer can't change before the insert).
     create()  the locked check-then-insert: one request at a time per machine, stale requests expired first,
@@ -11,7 +15,6 @@ Errors the app turns into one calm message + fresh start times: slot_taken (take
 has passed), outside_hours (the owner changed the hours meanwhile).
 """
 
-import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -21,10 +24,11 @@ from django.utils import timezone
 from rest_framework import status
 
 from core.errors import ApiError
+from catalog.models import JobCategory
 from listings.models import Listing, ListingOption
 
 from .actions import expire_overdue
-from .availability import IST, Plan, at, expires_at_for, hour_of, hours_for, load_plan, next_whole_hour, window
+from .availability import IST, Plan, at, check_hours, expires_at_for, hour_of, load_plan, next_whole_hour, window
 from .models import Booking, BookingEvent
 
 CONFLICT = status.HTTP_409_CONFLICT
@@ -38,30 +42,37 @@ class Slot:
 
 @dataclass
 class Checked:
-    """What one request would reserve. Several slots only for a per-day option over several days."""
+    """What one request would reserve: one slot of whole hours."""
 
     listing: Listing
     option: ListingOption
-    quantity: Decimal
-    hours: int | None  # None = per day: each slot is that day's open hours
+    hours: int
     slots: list[Slot]
 
     @property
     def gap(self) -> timedelta:
         return timedelta(hours=self.listing.gap_hours)
 
-    def row_quantity(self) -> Decimal:
-        return Decimal(1) if self.hours is None else self.quantity
-
     def row_total(self) -> Decimal | None:
-        """One row's estimate. Per day: one day's price per row; the group adds up."""
-        if self.option.price_unit == ListingOption.Unit.NEGOTIABLE or self.option.price is None:
+        """Only an hourly price gives an estimate (price × hours). Per एकड़ / दिन / मोल-भाव: agreed on the phone."""
+        if self.option.price_unit != ListingOption.Unit.HOUR or self.option.price is None:
             return None
-        return (self.option.price * self.row_quantity()).quantize(Decimal("0.01"))
+        return (self.option.price * self.hours).quantize(Decimal("0.01"))
 
     def total(self) -> Decimal | None:
-        one = self.row_total()
-        return None if one is None else one * len(self.slots)
+        return self.row_total()
+
+
+def auto_job(option: ListingOption) -> tuple[JobCategory, str]:
+    """Decision §23: the renter no longer picks the job. The attachment's first job, else the machine's; a
+    machine without jobs (अन्य) → "other" with the machine's name."""
+    for m in (option.implement, option.listing.machine_type):
+        if m is not None:
+            job = m.jobs.filter(is_active=True).order_by("sort_order").first()
+            if job:
+                return job, ""
+    name = option.listing.machine_type_other or option.listing.machine_type.name_hi
+    return JobCategory.objects.get(code="other"), name[:60]
 
 
 def find_option(option_id: int, user) -> ListingOption:
@@ -90,7 +101,7 @@ def first_day(start_at: datetime, now: datetime) -> date:
     return day
 
 
-def check(option: ListingOption, start_at: datetime, quantity: Decimal, now: datetime, *,
+def check(option: ListingOption, start_at: datetime, hours: int, now: datetime, *,
           listing: Listing | None = None) -> Checked:
     """The same rules as the start-time chips (05 §4), for one exact request. `listing` = the locked row
     when called from create(), so a pause or a new schedule that just happened is seen."""
@@ -98,18 +109,9 @@ def check(option: ListingOption, start_at: datetime, quantity: Decimal, now: dat
     if not listing.bookable:
         raise ApiError("not_bookable", CONFLICT)
     day = first_day(start_at, now)
-    hours = hours_for(option, quantity)  # 400 below_min_hours / validation_error for a bad quantity
-    _, last = window(now)
-    if hours is None:
-        days = [day + timedelta(days=i) for i in range(int(quantity))]
-        if days[-1] > last:
-            raise ApiError("validation_error", fields={"quantity": "outside_30_days"})
-        plan = load_plan(listing, day, days[-1], now)
-        slots = per_day_slots(plan, days, start_at)
-    else:
-        plan = load_plan(listing, day, day, now)
-        slots = [hour_slot(plan, day, start_at, hours)]
-    return Checked(listing=listing, option=option, quantity=quantity, hours=hours, slots=slots)
+    hours = check_hours(hours)
+    plan = load_plan(listing, day, day, now)
+    return Checked(listing=listing, option=option, hours=hours, slots=[hour_slot(plan, day, start_at, hours)])
 
 
 def hour_slot(plan: Plan, day: date, start_at: datetime, hours: int) -> Slot:
@@ -125,27 +127,14 @@ def hour_slot(plan: Plan, day: date, start_at: datetime, hours: int) -> Slot:
     return Slot(start, end)
 
 
-def per_day_slots(plan: Plan, days: list[date], start_at: datetime) -> list[Slot]:
-    """Whole days = each day's open hours (decision §12). start_at must be the first day's opening hour."""
-    slots = []
-    for d in days:
-        open_ = plan.open_hours(d)
-        if open_ is None or (d == days[0] and hour_of(d, start_at) != open_[0]):
-            raise ApiError("outside_hours", CONFLICT, fields={"date": d.isoformat()})
-        if not plan.day_free(d):
-            raise ApiError("slot_taken", CONFLICT, fields={"date": d.isoformat()})
-        slots.append(Slot(at(d, open_[0]), at(d, open_[1])))
-    return slots
-
-
 def expire_stale(listing: Listing, now: datetime) -> int:
     """Lazy expiry (05 §5): requests past their answer time stop holding the machine, before anything new is
     written. Each gets its history row. The push to the renter comes with notifications (slice 6)."""
     return len(expire_overdue(Booking.objects.filter(listing=listing), now))
 
 
-def create(*, renter, option: ListingOption, start_at: datetime, quantity: Decimal, job, job_other: str,
-           field: dict, now: datetime | None = None) -> list[Booking]:
+def create(*, renter, option: ListingOption, start_at: datetime, hours: int, field: dict,
+           now: datetime | None = None) -> list[Booking]:
     now = now or timezone.now()
     with transaction.atomic():
         # Layer 2: one request at a time per machine (the same lock as the owner's day / week changes).
@@ -153,11 +142,9 @@ def create(*, renter, option: ListingOption, start_at: datetime, quantity: Decim
         if listing.status == Listing.Status.REMOVED:
             raise ApiError("not_bookable", CONFLICT)
         expire_stale(listing, now)
-        checked = check(option, start_at, quantity, now, listing=listing)
-        first = checked.slots[0].start_at
-        expires_at = expires_at_for(first, now)
-        group_id = uuid.uuid4() if len(checked.slots) > 1 else None
-        hpa = option.effective_hours_per_acre() if option.price_unit == ListingOption.Unit.ACRE else None
+        checked = check(option, start_at, hours, now, listing=listing)
+        expires_at = expires_at_for(checked.slots[0].start_at, now)
+        job, job_other = auto_job(option)
         rows = []
         try:
             with transaction.atomic():  # savepoint: the no-overlap rule (layer 3) may still refuse
@@ -165,9 +152,8 @@ def create(*, renter, option: ListingOption, start_at: datetime, quantity: Decim
                     b = Booking.objects.create(
                         listing=listing, option=option, renter=renter, job=job, job_other=job_other,
                         start_at=slot.start_at, end_at=slot.end_at, blocked_until=slot.end_at + checked.gap,
-                        group_id=group_id, quantity=checked.row_quantity(),
-                        hours=int((slot.end_at - slot.start_at) / timedelta(hours=1)),
-                        price_unit=option.price_unit, unit_price=option.price, hours_per_acre_used=hpa,
+                        quantity=checked.hours, hours=checked.hours,
+                        price_unit=option.price_unit, unit_price=option.price,
                         estimated_total=checked.row_total(),
                         field_lat=field["lat"], field_lng=field["lng"],
                         field_village=field.get("village", ""), field_landmark=field.get("landmark", ""),

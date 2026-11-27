@@ -10,6 +10,7 @@ from rest_framework import serializers
 
 from accounts.models import Address
 from catalog.models import JobCategory, MachineType
+from core.errors import ApiError
 from core.storage import bucket_path
 
 from .models import Listing, ListingOption, Photo, WeeklyHours
@@ -48,12 +49,17 @@ def validate_week(days: list[dict]) -> list[dict]:
 
 
 class WeekSerializer(serializers.Serializer):
-    """PUT /api/listings/{id}/weekly-hours/"""
+    """PUT /api/listings/{id}/weekly-hours/. Decision §23 (owner, 2026-11-27): every machine is open every day
+    सुबह 7 बजे से शाम 7 बजे तक, so only that week is accepted (400 fixed_hours otherwise). Kept so an old app
+    gets a clear answer; the app no longer offers "समय बदलें"."""
 
     days = WeeklyHoursSerializer(many=True)
 
     def validate_days(self, days):
-        return validate_week(days)
+        days = validate_week(days)
+        if days != default_week():
+            raise ApiError("fixed_hours", fields={"days": "every_day_7_19"})
+        return days
 
 
 # --------------------------------------------------------------------- options
@@ -354,7 +360,7 @@ class ListingCreateSerializer(ListingFieldsSerializer):
         if len(attrs.get("photos", [])) > Listing.MAX_PHOTOS:
             raise serializers.ValidationError({"photos": "too_many_photos"})
         # Decision §22: no hours step in the wizard; a new machine is open every day 7–19 unless hours are sent.
-        attrs["weekly_hours"] = validate_week(attrs["weekly_hours"]) if attrs.get("weekly_hours") else default_week()
+        attrs["weekly_hours"] = default_week()  # decision §23: always every day 7–19, whatever an old app sends
         return attrs
 
 

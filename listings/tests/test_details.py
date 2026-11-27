@@ -19,7 +19,7 @@ def full_listing(me, listing_id, owner):
     """The conftest tractor + 2 photos + weekly hours, owned by "Ramesh Kumar" who lives in झूंसी."""
     me.post(f"/api/listings/{listing_id}/photos/", photo(name="a"), format="json")
     me.post(f"/api/listings/{listing_id}/photos/", photo(name="b"), format="json")
-    week = [{"weekday": d, "start_hour": 6, "end_hour": 18} for d in range(6)]
+    week = [{"weekday": d, "start_hour": 7, "end_hour": 19} for d in range(7)]  # the fixed hours (decision §23)
     assert me.put(f"/api/listings/{listing_id}/weekly-hours/", {"days": week}, format="json").status_code == 200
     owner.name = "Ramesh Kumar"
     owner.save()
@@ -60,8 +60,7 @@ def test_renter_view(renter, full_listing):
     assert body["village"] == "झूंसी"
     assert [p["url"].split("%2F")[-1].split("?")[0] for p in body["photos"]] == ["a_full.jpg", "b_full.jpg"]
     assert set(body["photos"][0]) == {"url", "thumb_url"}
-    assert body["weekly_hours"][0] == {"weekday": 0, "start_hour": 6, "end_hour": 18}
-    assert len(body["weekly_hours"]) == 6
+    assert body["weekly_hours"] == [{"weekday": d, "start_hour": 7, "end_hour": 19} for d in range(7)]
     assert body["owner"] == {"first_name": "Ramesh", "village": "झूंसी",
                              "member_since": full_listing.owner.date_joined.strftime("%Y-%m")}
     assert body["distance_km"] is None  # no point sent

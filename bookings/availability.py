@@ -15,21 +15,19 @@ Times: the owner and the renter think in whole IST hours on a date ("सुब�
 import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from django.db.models import Q
 from django.utils import timezone
 
 from core.errors import ApiError
-from listings.models import DayOverride, Listing, ListingOption
+from listings.models import DayOverride, Listing
 
 from .models import Booking
 
 IST = ZoneInfo("Asia/Kolkata")
 WINDOW_DAYS = 30  # bookings, the calendar and day changes all look at most 30 days ahead (decision §11)
-MAX_ACRES = Decimal("100")
-MAX_DAYS = WINDOW_DAYS
+MAX_HOURS = 12  # a booking is always whole hours (decision §23); the day is 7–19, so 12 is the most there is
 
 
 # --------------------------------------------------------------------- time helpers
@@ -76,27 +74,12 @@ def expires_at_for(start_at: datetime, now: datetime) -> datetime:
     return min(now + wait, start_at)
 
 
-def hours_for(option: ListingOption, quantity: Decimal) -> int | None:
-    """Whole hours one booking reserves (decision §12, 06 §8). None for per-day options: each day reserves
-    that day's open hours. Raises ApiError for a quantity the option doesn't allow."""
-    unit = option.price_unit
-    if unit in (ListingOption.Unit.HOUR, ListingOption.Unit.NEGOTIABLE):
-        if quantity != quantity.to_integral_value() or quantity < 1 or quantity > 24:
-            raise ApiError("validation_error", fields={"quantity": "whole_hours_1_24"})
-        if quantity < option.min_hours:
-            raise ApiError("below_min_hours", fields={"min_hours": option.min_hours})
-        return int(quantity)
-    if unit == ListingOption.Unit.ACRE:
-        if quantity <= 0 or quantity > MAX_ACRES or (quantity * 2) != (quantity * 2).to_integral_value():
-            raise ApiError("validation_error", fields={"quantity": "half_acre_steps"})
-        per_acre = option.effective_hours_per_acre()
-        if not per_acre:
-            raise ApiError("validation_error", fields={"quantity": "no_hours_per_acre"})
-        return math.ceil(quantity * Decimal(per_acre))  # rounded UP to whole hours (05 §4)
-    # day
-    if quantity != quantity.to_integral_value() or quantity < 1 or quantity > MAX_DAYS:
-        raise ApiError("validation_error", fields={"quantity": "whole_days"})
-    return None
+def check_hours(hours: int) -> int:
+    """Decision §23 (owner, 2026-11-27): renters always book whole hours (1, 2, 3 …), whatever the price unit.
+    Acres and days are only shown as the owner's price; the final price is agreed on the phone."""
+    if not isinstance(hours, int) or not 1 <= hours <= MAX_HOURS:
+        raise ApiError("validation_error", fields={"hours": "whole_hours_1_12"})
+    return hours
 
 
 # --------------------------------------------------------------------- one listing over a range of dates
@@ -166,15 +149,19 @@ class Plan:
             if at(day, s) >= earliest and not self.clashes(at(day, s), at(day, s) + reserve)
         ]
 
-    def day_free(self, day: date) -> bool:
-        """Per-day booking: the day is open, hasn't started yet, and nothing is booked in its hours (+ gap)."""
+    def max_hours(self, day: date, start: int) -> int:
+        """S11 "कितने घंटे?": the longest job that may start at `start` on `day` (0 = none). Ends at closing time
+        (7 PM) or where the next booking (with this job's own 1-hour rest gap) begins, by the same rule as the chips."""
         open_ = self.open_hours(day)
-        if open_ is None:
-            return False
-        start = at(day, open_[0])
-        if start < next_whole_hour(self.now):
-            return False
-        return not self.clashes(start, at(day, open_[1]) + timedelta(hours=self.listing.gap_hours))
+        if open_ is None or not open_[0] <= start < open_[1] or at(day, start) < next_whole_hour(self.now):
+            return 0
+        gap = self.listing.gap_hours
+        best = 0
+        for h in range(1, open_[1] - start + 1):
+            if self.clashes(at(day, start), at(day, start + h + gap)):
+                break
+            best = h
+        return best
 
 
 def load_plan(listing: Listing, first: date, last: date, now: datetime | None = None) -> Plan:

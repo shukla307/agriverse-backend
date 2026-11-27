@@ -25,14 +25,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.errors import ApiError
-from listings.models import DayOverride, Listing, ListingOption
-from listings.serializers import WeeklyHoursSerializer
+from listings.models import DayOverride, Listing
 from core.pagination import Pages
 from listings.views import my_listing
 
 from . import actions
 from . import requests as booking_requests
-from .availability import Plan, bookings_outside, hours_for, load_plan, window
+from .availability import Plan, bookings_outside, load_plan, window
 from .models import Booking
 from .serializers import ActionSerializer, CreateSerializer, ListParams, QuoteSerializer, booking_json, ist, money
 
@@ -129,42 +128,36 @@ class CalendarView(APIView):
 
 
 class StartTimesParams(serializers.Serializer):
-    option_id = serializers.IntegerField()
     date = serializers.DateField()
-    quantity = serializers.DecimalField(max_digits=5, decimal_places=1)
 
 
 class StartTimesView(APIView):
+    """S11 (decision §23): every start hour with at least 1 free hour that day, and for each the most hours a
+    job from there may last (until 7 PM or the next booking, keeping the 1-hour rest gap). Same for every price
+    of the machine: it's the machine that is booked."""
+
     def get(self, request, pk):
         listing = visible_listing(pk)
         params = StartTimesParams(data=request.query_params)
         params.is_valid(raise_exception=True)
-        p = params.validated_data
-        option = ListingOption.objects.select_related("implement", "listing__machine_type").filter(
-            listing=listing, is_active=True, pk=p["option_id"]
-        ).first()
-        if option is None:
-            raise ApiError("validation_error", fields={"option_id": "unknown"})
         if not listing.bookable:
             raise ApiError("not_bookable", status.HTTP_409_CONFLICT)
         now = timezone.now()
-        day = in_window(p["date"], now)
-        hours = hours_for(option, p["quantity"])
+        day = in_window(params.validated_data["date"], now)
         _, last = window(now)
         plan = load_plan(listing, day, last, now)
-
-        if hours is None:  # per day: which dates (from `day`) are open with nothing booked
-            free = [d for d in (day + timedelta(days=i) for i in range((last - day).days + 1)) if plan.day_free(d)]
-            return Response({"hours": None, "days_free": [d.isoformat() for d in free]})
-
-        starts = plan.start_hours(day, hours)
+        starts = plan.start_hours(day, 1)
         next_free = None
-        if not starts:  # suggest the next date that has a start time for the same job (S11)
+        if not starts:  # suggest the next date with a free hour (S11 "{day} देखें")
             for i in range(1, (last - day).days + 1):
-                if plan.start_hours(day + timedelta(days=i), hours):
+                if plan.start_hours(day + timedelta(days=i), 1):
                     next_free = (day + timedelta(days=i)).isoformat()
                     break
-        return Response({"hours": hours, "start_hours": starts, "next_free_date": next_free})
+        return Response({
+            "start_hours": starts,
+            "max_hours": {str(s): plan.max_hours(day, s) for s in starts},
+            "next_free_date": next_free,
+        })
 
 
 # --------------------------------------------------------------------- one date (owner)
@@ -176,11 +169,10 @@ class DaySerializer(serializers.Serializer):
     end_hour = serializers.IntegerField(min_value=1, max_value=24, required=False, allow_null=True)
 
     def validate(self, attrs):
-        if attrs["is_closed"]:
-            attrs["start_hour"] = attrs["end_hour"] = None
-            return attrs
-        hours = WeeklyHoursSerializer(data={"weekday": 0, **{k: attrs.get(k) for k in ("start_hour", "end_hour")}})
-        hours.is_valid(raise_exception=True)
+        # Decision §23: the hours are fixed (7–19); a day can only be CLOSED (slice 8), not given other hours.
+        if not attrs["is_closed"]:
+            raise ApiError("fixed_hours", fields={"is_closed": "only_closing"})
+        attrs["start_hour"] = attrs["end_hour"] = None
         return attrs
 
 
@@ -241,7 +233,7 @@ class QuoteView(APIView):
         ser.is_valid(raise_exception=True)
         d = ser.validated_data
         option = booking_requests.find_option(d["option_id"], request.user)
-        checked = booking_requests.check(option, d["start_at"], d["quantity"], timezone.now())
+        checked = booking_requests.check(option, d["start_at"], d["hours"], timezone.now())
         last = checked.slots[-1].end_at
         return Response({
             "available": True,
@@ -249,7 +241,6 @@ class QuoteView(APIView):
             "start_at": ist(checked.slots[0].start_at),
             "end_at": ist(last),
             "blocked_until": ist(last + checked.gap),
-            "days": len(checked.slots) if checked.hours is None else None,
             "estimated_total": money(checked.total()),
             "price_unit": option.price_unit,
         })
@@ -301,8 +292,7 @@ class BookingsView(APIView):
         d = ser.validated_data
         option = booking_requests.find_option(d["option_id"], request.user)
         rows = booking_requests.create(
-            renter=request.user, option=option, start_at=d["start_at"], quantity=d["quantity"],
-            job=d["job"], job_other=d["job_other"], field=d["field"],
+            renter=request.user, option=option, start_at=d["start_at"], hours=d["hours"], field=d["field"],
         )
         # The push to the owner ("booking_requested") comes with notifications (slices 6–7).
         return Response(booking_json(full_booking(rows[0].pk), group=rows), status=status.HTTP_201_CREATED)

@@ -166,19 +166,20 @@ def put_week(me, lid, days):
     return me.put(f"/api/listings/{lid}/weekly-hours/", {"days": days}, format="json")
 
 
-def test_set_week_makes_the_listing_bookable(me, listing_id):
-    res = put_week(me, listing_id, [{"weekday": 0, "start_hour": 6, "end_hour": 12},
-                                     {"weekday": 6, "start_hour": 12, "end_hour": 18}])
+def test_every_day_7_to_19_is_the_only_week(me, listing_id):
+    """Decision §23 (owner, 2026-11-27): fixed hours. The app no longer offers "समय बदलें"."""
+    res = put_week(me, listing_id, [{"weekday": d, "start_hour": 7, "end_hour": 19} for d in range(7)])
     assert res.status_code == 200 and res.json()["has_schedule"] is True
-    body = me.get(f"/api/listings/{listing_id}/").json()
-    assert body["bookable"] is True and [d["weekday"] for d in body["weekly_hours"]] == [0, 6]
 
 
-def test_week_replaces_the_old_one(me, listing_id):
-    put_week(me, listing_id, [{"weekday": d, "start_hour": 6, "end_hour": 18} for d in range(7)])
-    put_week(me, listing_id, [{"weekday": 2, "start_hour": 0, "end_hour": 24}])
-    assert me.get(f"/api/listings/{listing_id}/").json()["weekly_hours"] == [
-        {"weekday": 2, "start_hour": 0, "end_hour": 24}]
+@pytest.mark.parametrize("days", [
+    [{"weekday": d, "start_hour": 0, "end_hour": 24} for d in range(7)],  # BUGS.md #19
+    [{"weekday": d, "start_hour": 6, "end_hour": 18} for d in range(7)],
+    [{"weekday": 0, "start_hour": 7, "end_hour": 19}],
+])
+def test_other_weeks_are_fixed_hours(me, listing_id, days):
+    res = put_week(me, listing_id, days)
+    assert res.status_code == 400 and res.json()["error"]["code"] == "fixed_hours"
 
 
 @pytest.mark.parametrize("days", [

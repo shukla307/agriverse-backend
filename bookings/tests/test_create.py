@@ -5,7 +5,6 @@ Clock: Monday 2026-11-23 07:30 IST (conftest). Ramesh's tractor: every day 6–1
 
 import threading
 from datetime import timedelta
-from decimal import Decimal
 
 import pytest
 from django.db import connection
@@ -24,10 +23,11 @@ from .conftest import MON, TUE, WED, book, set_week, starts
 URL = "/api/bookings/"
 
 
-def body(option, day, hour, quantity, **extra):
+def body(option, day, hour, hours, **extra):
+    """Decision §23: one price, a start hour and whole hours; no job (the server takes it from the machine)."""
     return {
-        "option_id": option.pk, "start_at": at(day, hour).isoformat(), "quantity": str(quantity),
-        "job": "land_prep", "field": {"lat": "25.51", "lng": "81.86", "village": "सोरांव", "landmark": "पुल के पास"},
+        "option_id": option.pk, "start_at": at(day, hour).isoformat(), "hours": hours,
+        "field": {"lat": "25.51", "lng": "81.86", "village": "सोरांव", "landmark": "पुल के पास"},
         **extra,
     }
 
@@ -54,12 +54,20 @@ class TestSendARequest:
         assert b.renter == renter and b.field_village == "सोरांव"
         assert list(b.events.values_list("to_status", flat=True)) == ["requested"]
 
-    def test_acres_are_rounded_up_to_whole_hours(self, as_renter, tractor):
-        res = send(as_renter, tractor.opt_acre, TUE, 8, "2.5")  # 2.5 × 1.5 = 3.75 → 4 hours
+    def test_an_acre_price_books_whole_hours_without_an_estimate(self, as_renter, tractor):
+        """Decision §23: acres are the owner's price only; the renter books hours, the price is agreed by phone."""
+        res = send(as_renter, tractor.opt_acre, TUE, 8, 3)
         j = res.json()
         assert res.status_code == 201, j
-        assert j["hours"] == 4 and j["end_at"] == "2026-11-24T12:00:00+05:30"
-        assert j["estimated_total"] == "3750.00" and j["option"]["hours_per_acre"] == "1.5"
+        assert j["hours"] == 3 and j["end_at"] == "2026-11-24T11:00:00+05:30"
+        assert j["estimated_total"] is None and j["option"]["price_unit"] == "acre"
+        assert j["option"]["unit_price"] == "1500.00"  # shown as information
+
+    def test_a_day_price_books_whole_hours_too(self, as_renter, tractor):
+        res = send(as_renter, tractor.opt_day, TUE, 8, 4)
+        j = res.json()
+        assert res.status_code == 201, j
+        assert j["hours"] == 4 and j["days"] == [] and j["group_id"] is None and j["estimated_total"] is None
 
     def test_negotiable_has_no_estimate(self, as_renter, tractor):
         tractor.opt_hour.price_unit, tractor.opt_hour.price = "negotiable", None
@@ -68,26 +76,19 @@ class TestSendARequest:
         assert res.status_code == 201, res.json()
         assert res.json()["estimated_total"] is None
 
-    def test_days_one_row_per_day_with_that_days_hours(self, as_renter, tractor):
-        DayOverride.objects.create(listing=tractor, date=WED, is_closed=False, start_hour=8, end_hour=14)
-        res = send(as_renter, tractor.opt_day, TUE, 6, 2)
-        j = res.json()
-        assert res.status_code == 201, j
-        rows = Booking.objects.filter(group_id=j["group_id"]).order_by("start_at")
-        assert [(r.start_at, r.end_at) for r in rows] == [(at(TUE, 6), at(TUE, 18)), (at(WED, 8), at(WED, 14))]
-        assert [d["start_at"][:10] for d in j["days"]] == ["2026-11-24", "2026-11-25"]
-        assert j["quantity"] == "2" and j["estimated_total"] == "10000.00"
-        assert len({r.expires_at for r in rows}) == 1  # the group is answered together
+    def test_the_job_comes_from_the_machine(self, as_renter, tractor):
+        """The renter no longer picks it: the attachment's first job, else the machine's. A sent job is ignored."""
+        alone = send(as_renter, tractor.opt_hour, TUE, 8, 1, job="harvesting").json()
+        with_rotavator = send(as_renter, tractor.opt_acre, TUE, 12, 1).json()
+        assert alone["job"]["code"] == "land_prep"  # tractor: जुताई, ढुलाई → the first
+        assert with_rotavator["job"]["code"] == "land_prep"
 
-    def test_a_closed_day_inside_the_days_is_refused(self, as_renter, tractor):
-        DayOverride.objects.create(listing=tractor, date=WED, is_closed=True)
-        assert code(send(as_renter, tractor.opt_day, TUE, 6, 2)) == "outside_hours"
-
-    def test_job_other_needs_a_name(self, as_renter, tractor):
-        res = send(as_renter, tractor.opt_hour, TUE, 8, 2, job="other")
-        assert res.status_code == 400 and "job_other" in res.json()["error"]["fields"]
-        res = send(as_renter, tractor.opt_hour, TUE, 8, 2, job="other", job_other="  मेड़ बनाना ")
-        assert res.status_code == 201 and res.json()["job_other"] == "मेड़ बनाना"
+    def test_a_machine_without_jobs_books_as_other_with_its_name(self, as_renter, tractor):
+        tractor.machine_type_other = "गन्ना कटर"
+        tractor.save()
+        tractor.machine_type.jobs.clear()
+        j = send(as_renter, tractor.opt_hour, TUE, 8, 1).json()
+        assert j["job"]["code"] == "other" and j["job_other"] == "गन्ना कटर"
 
     def test_a_saved_place_is_copied(self, as_renter, tractor, renter):
         field = Address.objects.create(user=renter, label="field", lat="25.52", lng="81.87", village="बहरिया",
@@ -165,11 +166,12 @@ class TestRefused:
         b["start_at"] = (at(TUE, 8) + timedelta(minutes=30)).isoformat()
         assert code(as_renter.post(URL, b, format="json")) == "not_whole_hour"
 
-    def test_below_min_hours(self, as_renter, tractor):
-        assert code(send(as_renter, tractor.opt_hour, TUE, 8, 1)) == "below_min_hours"  # min 2
+    @pytest.mark.parametrize("hours", [0, 13, "2.5", None])
+    def test_only_whole_hours_1_to_12(self, as_renter, tractor, hours):
+        assert code(send(as_renter, tractor.opt_hour, TUE, 8, hours)) == "validation_error"
 
-    def test_half_acre_steps_only(self, as_renter, tractor):
-        assert code(send(as_renter, tractor.opt_acre, TUE, 8, "1.3")) == "validation_error"
+    def test_one_hour_is_enough_whatever_the_old_minimum(self, as_renter, tractor):
+        assert send(as_renter, tractor.opt_hour, TUE, 8, 1).status_code == 201  # opt_hour had min 2 (decision §22)
 
     def test_more_than_30_days_ahead(self, as_renter, tractor):
         assert code(send(as_renter, tractor.opt_hour, MON + timedelta(days=30), 8, 2)) == "validation_error"
@@ -212,14 +214,17 @@ class TestStaleRequests:
     def test_the_chips_and_the_check_agree(self, as_renter, tractor, renter):
         """Every chip the app shows can be sent; every other hour is refused (one rule, 05 §4)."""
         book(tractor, tractor.opt_hour, renter, TUE, 9, 11)
-        chips = starts(as_renter, tractor, tractor.opt_hour, TUE, 2).json()["start_hours"]
+        answer = starts(as_renter, tractor, TUE).json()
         now = at(MON, 7) + timedelta(minutes=30)
         for hour in range(0, 24):
-            if hour in chips:
-                assert booking_requests.check(tractor.opt_hour, at(TUE, hour), Decimal(2), now).slots
-            else:
-                with pytest.raises(ApiError):
-                    booking_requests.check(tractor.opt_hour, at(TUE, hour), Decimal(2), now)
+            longest = answer["max_hours"].get(str(hour), 0)
+            assert (hour in answer["start_hours"]) == (longest > 0)
+            for hours in range(1, 13):
+                if hours <= longest:
+                    assert booking_requests.check(tractor.opt_hour, at(TUE, hour), hours, now).slots
+                else:
+                    with pytest.raises(ApiError):
+                        booking_requests.check(tractor.opt_hour, at(TUE, hour), hours, now)
 
 
 class TestDatabaseIsTheLastGuard:
@@ -260,20 +265,20 @@ class TestTwoAtTheSameMoment:
 
 class TestQuote:
     def test_estimate_without_holding(self, as_renter, tractor):
-        res = as_renter.post(URL + "quote/", {"option_id": tractor.opt_acre.pk, "start_at": at(TUE, 8).isoformat(),
-                                              "quantity": "2.5"}, format="json")
+        res = as_renter.post(URL + "quote/", {"option_id": tractor.opt_cult.pk, "start_at": at(TUE, 8).isoformat(),
+                                              "hours": 4}, format="json")
         assert res.status_code == 200, res.json()
         assert res.json() == {
             "available": True, "hours": 4, "start_at": "2026-11-24T08:00:00+05:30",
             "end_at": "2026-11-24T12:00:00+05:30", "blocked_until": "2026-11-24T13:00:00+05:30",
-            "days": None, "estimated_total": "3750.00", "price_unit": "acre",
+            "estimated_total": "3200.00", "price_unit": "hour",
         }
         assert not Booking.objects.exists()
 
     def test_taken(self, as_renter, tractor, renter):
         book(tractor, tractor.opt_hour, renter, TUE, 8, 11)
         res = as_renter.post(URL + "quote/", {"option_id": tractor.opt_hour.pk, "start_at": at(TUE, 9).isoformat(),
-                                              "quantity": "2"}, format="json")
+                                              "hours": 2}, format="json")
         assert res.status_code == 409 and code(res) == "slot_taken"
 
 
