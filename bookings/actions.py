@@ -9,7 +9,9 @@ Changing a booking after it was sent (Phase 5 slice 4; docs/06-api.md §8 "Statu
     complete_done   accepted work 12 h after it ended → completed (run_booking_jobs)
 
 Errors: 409 `expired` (the owner answers too late), 409 `invalid_status` (someone acted first, e.g. the renter
-cancelled; `fields.status` = what it is now), 409 `not_started` (काम पूरा हुआ before the work began),
+cancelled, or the owner accepted while the renter cancelled without a reason; `fields.status` = what it is now),
+400 `reason: required` (reject, any cancel of an accepted booking) / `reason: invalid` (the other side's chip),
+409 `not_started` (काम पूरा हुआ before the work began),
 403 `permission_denied` (e.g. a renter tries to accept), 404 for anyone who isn't the renter or the owner.
 The pushes to the other person come with notifications (slices 6–7).
 """
@@ -37,18 +39,27 @@ AUTO_COMPLETE_AFTER = timedelta(hours=12)  # 06 §8: accepted work is completed 
 class Rule:
     allowed_from: tuple[str, ...]
     to: str
-    reason_required: bool = False
+    reason_from: tuple[str, ...] = ()  # a reason chip is required when the booking is in one of these
 
 
 # (action, who) → rule. Anything missing is not allowed (403).
 RULES: dict[tuple[str, str], Rule] = {
     ("accept", "owner"): Rule((S.REQUESTED,), S.ACCEPTED),
-    ("reject", "owner"): Rule((S.REQUESTED,), S.REJECTED, reason_required=True),
-    ("cancel", "renter"): Rule((S.REQUESTED, S.ACCEPTED), S.CANCELLED_BY_RENTER),
-    ("cancel", "owner"): Rule((S.ACCEPTED,), S.CANCELLED_BY_OWNER, reason_required=True),
+    ("reject", "owner"): Rule((S.REQUESTED,), S.REJECTED, reason_from=(S.REQUESTED,)),
+    # Slice 5: a waiting request is cancelled with one tap; a CONFIRMED one only with a reason (decision §21:
+    # talk first, then the reason, like the owner).
+    ("cancel", "renter"): Rule((S.REQUESTED, S.ACCEPTED), S.CANCELLED_BY_RENTER, reason_from=(S.ACCEPTED,)),
+    ("cancel", "owner"): Rule((S.ACCEPTED,), S.CANCELLED_BY_OWNER, reason_from=(S.ACCEPTED,)),
     ("complete", "owner"): Rule((S.ACCEPTED,), S.COMPLETED),
 }
 ACTIONS = sorted({a for a, _ in RULES})
+
+R = Booking.Reason
+# Each side has its own chips (glossary §6); "कोई और वजह" ends both lists.
+REASONS = {
+    "owner": {R.BUSY, R.REPAIR, R.TOO_FAR, R.OTHER},
+    "renter": {R.NOT_NEEDED, R.FOUND_OTHER, R.WEATHER, R.OTHER},
+}
 
 
 def expire_overdue(qs: QuerySet, now: datetime) -> list[int]:
@@ -83,7 +94,9 @@ def act(*, booking_id: int, user, action: str, reason: str = "", reason_other: s
     rule = RULES.get((action, who))
     if rule is None:
         raise ApiError("permission_denied", status.HTTP_403_FORBIDDEN)
-    if rule.reason_required and not reason:
+    if reason and reason not in REASONS[who]:
+        raise ApiError("validation_error", fields={"reason": "invalid"})
+    if b.status in rule.reason_from and not reason:
         raise ApiError("validation_error", fields={"reason": "required"})
 
     refused = None  # raised only AFTER the transaction is saved, so the expiry below is never rolled back
@@ -100,6 +113,10 @@ def act(*, booking_id: int, user, action: str, reason: str = "", reason_other: s
                 refused = ApiError("expired", CONFLICT)
             else:
                 refused = ApiError("invalid_status", CONFLICT, fields={"status": current})
+        elif current in rule.reason_from and not reason:
+            # Changed meanwhile into a status that needs a reason (the owner accepted while the renter tapped
+            # S12's one-tap cancel): say "it changed" so the app reloads and asks properly.
+            refused = ApiError("invalid_status", CONFLICT, fields={"status": current})
         elif action == "complete" and now < min(r.start_at for r in rows):
             refused = ApiError("not_started", CONFLICT)
         else:

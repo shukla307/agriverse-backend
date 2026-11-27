@@ -50,6 +50,10 @@
     tested row by row) + `act()` (listing lock, `expire_overdue()` first, a per-day group changes together, refusals raised
     AFTER the transaction so the expiry is kept) + `complete_done()` (accepted, 12 h after the end). `expire_overdue(qs, now)`
     is THE expiry (create, every read, the command). `python manage.py run_booking_jobs` = both jobs (🔑 Render Cron later).
+    **Renter side (slice 5):** `Rule.reason_from` = from which statuses a reason chip is required (renter: only cancelling an
+    ACCEPTED booking); `REASONS` = each side's chips (renter not_needed / found_other / weather / other; the other side's →
+    400 `reason: invalid`; migration `0002_renter_reasons`). Accepted meanwhile under the lock + no reason → 409
+    `invalid_status`. `GET /api/bookings/?role=renter`: still on first (soonest `start_at`), then newest first.
   - `core/storage.py` `bucket_path(url)`: the one check for "is this link a file in OUR bucket?".
     `core/pagination.py` `Pages`: 20 per page → `{count, next_page, results}`.
   - The old `api/` and `equipment/` apps (and the commented-out `core/firebase.py`) were **deleted on `v1`** (cleanup, 2026-11-19). They exist only on `master`.

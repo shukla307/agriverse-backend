@@ -39,6 +39,10 @@ class Booking(models.Model):
         BUSY = "busy", "उस दिन खाली नहीं"
         REPAIR = "repair", "मशीन ख़राब है"
         TOO_FAR = "too_far", "बहुत दूर है"
+        # The renter's own (slice 5): the owner's chips above don't fit a renter.
+        NOT_NEEDED = "not_needed", "अब ज़रूरत नहीं है"
+        FOUND_OTHER = "found_other", "दूसरी मशीन मिल गई"
+        WEATHER = "weather", "मौसम ख़राब है"
         OTHER = "other", "कोई और वजह"
 
     # These hold the machine. A `requested` row past its expires_at still counts for the database until it's
@@ -79,7 +83,7 @@ class Booking(models.Model):
     accepted_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
-    reason = models.CharField(max_length=10, choices=Reason.choices, blank=True)
+    reason = models.CharField(max_length=12, choices=Reason.choices, blank=True)
     reason_other = models.CharField(max_length=60, blank=True)
 
     class Meta:
@@ -116,7 +120,7 @@ class BookingEvent(models.Model):
     actor = models.ForeignKey(  # null = the system (expiry, auto-complete)
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
-    reason = models.CharField(max_length=10, choices=Booking.Reason.choices, blank=True)
+    reason = models.CharField(max_length=12, choices=Booking.Reason.choices, blank=True)
     reason_other = models.CharField(max_length=60, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

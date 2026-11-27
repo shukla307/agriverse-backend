@@ -264,18 +264,27 @@ class BookingsView(APIView):
         )
         if p["status"]:
             qs = qs.filter(status__in=p["status"])
-        qs = (
-            qs.annotate(
-                waiting=Case(When(status=Booking.Status.REQUESTED, then=Value(0)), default=Value(1),
-                             output_field=IntegerField()),
+        if p["role"] == "owner":
+            qs = qs.annotate(
+                first=Case(When(status=Booking.Status.REQUESTED, then=Value(0)), default=Value(1),
+                           output_field=IntegerField()),
                 # Requests to answer: the one whose answer time ends first on top (emulator, slice 4: a
                 # newer request for Saturday sat above tomorrow's, which had only 2 hours left).
-                answer_by=Case(When(status=Booking.Status.REQUESTED, then=F("expires_at")), default=None),
+                soonest=Case(When(status=Booking.Status.REQUESTED, then=F("expires_at")), default=None),
             )
-            .select_related("listing__machine_type", "listing__owner", "option__implement",
+        else:
+            # The renter (slice 5, "मेरी बुकिंग"): what is still on (waiting or confirmed) first, the work that
+            # comes soonest on top; then the finished ones, newest first. The Home card shows the first rows.
+            qs = qs.annotate(
+                first=Case(When(status__in=Booking.ACTIVE, then=Value(0)), default=Value(1),
+                           output_field=IntegerField()),
+                soonest=Case(When(status__in=Booking.ACTIVE, then=F("start_at")), default=None),
+            )
+        qs = (
+            qs.select_related("listing__machine_type", "listing__owner", "option__implement",
                             "renter__home_address", "job")
             .prefetch_related("events", "listing__photos")
-            .order_by("waiting", "answer_by", "-created_at", "-id")  # 06 §8 + soonest answer time first
+            .order_by("first", "soonest", "-created_at", "-id")  # 06 §8
         )
         pages = Pages()
         page = pages.paginate_queryset(qs, request, view=self)

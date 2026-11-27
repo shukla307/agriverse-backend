@@ -72,7 +72,8 @@ def test_every_transition(api, owner, renter, tractor, frozen, action, who, star
     b = book(tractor, tractor.opt_hour, renter, MON, 6, 9, status=start, expires_at=at(MON, 10))
     user = owner if who == "owner" else renter
     api.force_authenticate(user)
-    body = {"reason": "busy"} if action in ("reject", "cancel") else {}
+    chip = "busy" if who == "owner" else "not_needed"  # each side has its own chips
+    body = {"reason": chip} if action in ("reject", "cancel") else {}
     res = api.post(url(b, action), body, format="json")
     b.refresh_from_db()
     if rule is None:
@@ -93,12 +94,14 @@ def test_every_transition(api, owner, renter, tractor, frozen, action, who, star
 
 
 def test_the_table_is_what_the_owner_approved():
-    assert {k: (r.allowed_from, r.to, r.reason_required) for k, r in RULES.items()} == {
-        ("accept", "owner"): (("requested",), "accepted", False),
-        ("reject", "owner"): (("requested",), "rejected", True),
-        ("cancel", "renter"): (("requested", "accepted"), "cancelled_by_renter", False),
-        ("cancel", "owner"): (("accepted",), "cancelled_by_owner", True),
-        ("complete", "owner"): (("accepted",), "completed", False),
+    # The last column: from which statuses a reason chip is required (slice 5: the renter only for a
+    # confirmed booking; a waiting request is cancelled with one tap).
+    assert {k: (r.allowed_from, r.to, r.reason_from) for k, r in RULES.items()} == {
+        ("accept", "owner"): (("requested",), "accepted", ()),
+        ("reject", "owner"): (("requested",), "rejected", ("requested",)),
+        ("cancel", "renter"): (("requested", "accepted"), "cancelled_by_renter", ("accepted",)),
+        ("cancel", "owner"): (("accepted",), "cancelled_by_owner", ("accepted",)),
+        ("complete", "owner"): (("accepted",), "completed", ()),
     }
 
 
@@ -162,6 +165,60 @@ class TestAccept:
         b = waiting(tractor, renter)
         res = as_renter.post(url(b, "cancel"), {}, format="json")
         assert res.status_code == 200 and res.json()["status"] == "cancelled_by_renter"
+
+
+class TestRenterCancelsConfirmed:
+    """Slice 5 (decision §21): after acceptance the renter talks first, then gives a reason, like the owner."""
+
+    def test_needs_a_reason(self, as_renter, tractor, renter):
+        b = book(tractor, tractor.opt_hour, renter, TUE, 8, 11)
+        res = as_renter.post(url(b, "cancel"), {}, format="json")
+        assert res.status_code == 400 and res.json()["error"]["fields"] == {"reason": "required"}
+        b.refresh_from_db()
+        assert b.status == "accepted" and not b.events.exists()
+
+    @pytest.mark.parametrize("chip", ["not_needed", "found_other", "weather"])
+    def test_with_a_renter_chip(self, as_renter, tractor, renter, chip):
+        b = book(tractor, tractor.opt_hour, renter, TUE, 8, 11)
+        j = as_renter.post(url(b, "cancel"), {"reason": chip}, format="json").json()
+        assert (j["status"], j["reason"]) == ("cancelled_by_renter", chip)
+        assert "contact" not in j  # the phones go away again
+        assert b.events.get().reason == chip
+
+    def test_other_needs_words(self, as_renter, tractor, renter):
+        b = book(tractor, tractor.opt_hour, renter, TUE, 8, 11)
+        res = as_renter.post(url(b, "cancel"), {"reason": "other"}, format="json")
+        assert res.status_code == 400 and "reason_other" in res.json()["error"]["fields"]
+        j = as_renter.post(url(b, "cancel"), {"reason": "other", "reason_other": "बेटे की शादी"}, format="json").json()
+        assert (j["reason"], j["reason_other"]) == ("other", "बेटे की शादी")
+
+    @pytest.mark.parametrize("who,chip", [("renter", "repair"), ("renter", "too_far"), ("renter", "busy"),
+                                          ("owner", "not_needed"), ("owner", "weather")])
+    def test_the_other_sides_chip_is_refused(self, owner, renter, tractor, who, chip):
+        b = book(tractor, tractor.opt_hour, renter, TUE, 8, 11)
+        res = client(renter if who == "renter" else owner).post(url(b, "cancel"), {"reason": chip}, format="json")
+        assert res.status_code == 400 and res.json()["error"]["fields"] == {"reason": "invalid"}
+        b.refresh_from_db()
+        assert b.status == "accepted"
+
+    def test_accepted_meanwhile_says_it_changed(self, as_renter, tractor, renter, monkeypatch):
+        """S12's one-tap cancel while the owner accepts: the renter's check saw "requested", the lock sees
+        "accepted" → 409 invalid_status (the app reloads and asks properly), never a cancel without a reason."""
+        b = waiting(tractor, renter)
+        from bookings import actions
+
+        real = actions.expire_overdue
+
+        def owner_accepts_now(qs, now):  # runs inside the lock, after the first status read
+            Booking.objects.filter(pk=b.pk).update(status=S.ACCEPTED)
+            return real(qs, now)
+
+        monkeypatch.setattr(actions, "expire_overdue", owner_accepts_now)
+        res = as_renter.post(url(b, "cancel"), {}, format="json")
+        assert res.status_code == 409 and code(res) == "invalid_status"
+        assert res.json()["error"]["fields"]["status"] == "accepted"
+        b.refresh_from_db()
+        assert b.status == "accepted" and not b.events.exists()
 
 
 class TestComplete:
@@ -267,6 +324,60 @@ class TestOwnerList:
             assert as_owner.get(self.URL, {"role": "owner"}).status_code == 200
 
 
+class TestRenterList:
+    """Slice 5 "मेरी बुकिंग": what is still on first (soonest work on top), then the rest newest first."""
+
+    URL = "/api/bookings/"
+
+    def test_on_going_first_soonest_work_on_top(self, as_renter, tractor, renter, frozen):
+        wed_confirmed = book(tractor, tractor.opt_hour, renter, WED, 8, 10)
+        frozen.tick(timedelta(minutes=1))
+        old_rejected = book(tractor, tractor.opt_hour, renter, TUE, 6, 7, status=S.REJECTED)
+        frozen.tick(timedelta(minutes=1))
+        tue_waiting = waiting(tractor, renter, TUE, 13, 15)
+        frozen.tick(timedelta(minutes=1))
+        tue_confirmed = book(tractor, tractor.opt_hour, renter, TUE, 8, 10)  # newest, but not the soonest
+        frozen.tick(timedelta(minutes=1))
+        new_cancelled = book(tractor, tractor.opt_hour, renter, WED, 14, 16, status=S.CANCELLED_BY_RENTER)
+        j = as_renter.get(self.URL, {"role": "renter"}).json()
+        assert [r["id"] for r in j["results"]] == [
+            tue_confirmed.pk, tue_waiting.pk, wed_confirmed.pk,  # on going: by start time
+            new_cancelled.pk, old_rejected.pk,  # finished: newest first
+        ]
+        assert j["results"][0]["owner"] == {"name": "Ramesh"}
+
+    def test_home_card_asks_only_for_what_is_on(self, as_renter, tractor, renter):
+        book(tractor, tractor.opt_hour, renter, TUE, 8, 10)
+        waiting(tractor, renter, TUE, 13, 15)
+        book(tractor, tractor.opt_hour, renter, WED, 8, 10, status=S.COMPLETED)
+        j = as_renter.get(self.URL, {"role": "renter", "status": "requested,accepted"}).json()
+        assert j["count"] == 2
+
+    def test_contact_only_on_the_confirmed_one(self, as_renter, tractor, renter):
+        confirmed = book(tractor, tractor.opt_hour, renter, TUE, 8, 10)
+        waiting(tractor, renter, TUE, 13, 15)
+        rows = {r["id"]: r for r in as_renter.get(self.URL, {"role": "renter"}).json()["results"]}
+        assert [i for i, r in rows.items() if "contact" in r] == [confirmed.pk]
+        assert rows[confirmed.pk]["contact"]["owner_phone"].startswith("+91")
+
+    def test_only_mine(self, as_owner, tractor, renter):
+        waiting(tractor, renter)
+        assert as_owner.get(self.URL, {"role": "renter"}).json()["count"] == 0
+
+    def test_queries_dont_grow_with_the_list(self, as_renter, tractor, renter):
+        def queries():
+            with CaptureQueriesContext(connection) as ctx:
+                assert as_renter.get(self.URL, {"role": "renter"}).status_code == 200
+            return len(ctx.captured_queries)
+
+        waiting(tractor, renter, TUE, 6, 7)
+        one = queries()
+        for start in (9, 12):
+            waiting(tractor, renter, TUE, start, start + 1)
+        book(tractor, tractor.opt_hour, renter, TUE, 15, 16)
+        assert queries() == one
+
+
 # --------------------------------------------------------------------- run_booking_jobs
 
 
@@ -335,7 +446,8 @@ class TestRejectAndCancelAtOnce:
             c = client(user)
             try:
                 barrier.wait()
-                results[action] = c.post(url(b, action), {"reason": "busy"}, format="json").status_code
+                chip = "busy" if action == "reject" else "not_needed"  # each side's own chip
+                results[action] = c.post(url(b, action), {"reason": chip}, format="json").status_code
             finally:
                 connection.close()
 
