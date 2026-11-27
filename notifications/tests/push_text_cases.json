@@ -1,0 +1,174 @@
+{
+ "_note": "Push sentences (glossary §8). The server (notifications/push_text.py) and the app (notification_words.dart) must both give `text`. Keep agriverse_app/test/fixtures/push_text_cases.json an exact copy.",
+ "cases": [
+  {
+   "type": "booking_requested",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": "कल्टीवेटर",
+    "start": "2026-11-24T08:00:00+05:30",
+    "end": "2026-11-24T11:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "Suresh आपकी मशीन (ट्रैक्टर + कल्टीवेटर) कल सुबह 8 बजे से सुबह 11 बजे तक के लिए बुक करना चाहते हैं। हाँ या ना बताएँ।"
+  },
+  {
+   "type": "booking_requested",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-23T12:00:00+05:30",
+    "end": "2026-11-23T14:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "Suresh आपकी मशीन (ट्रैक्टर) आज दोपहर 12 बजे से दोपहर 2 बजे तक के लिए बुक करना चाहते हैं। हाँ या ना बताएँ।"
+  },
+  {
+   "type": "booking_requested",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "भूसा मशीन",
+    "implement": null,
+    "start": "2026-11-26T16:00:00+05:30",
+    "end": "2026-11-26T19:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "Suresh आपकी मशीन (भूसा मशीन) 26 गुरु शाम 4 बजे से शाम 7 बजे तक के लिए बुक करना चाहते हैं। हाँ या ना बताएँ।"
+  },
+  {
+   "type": "booking_requested",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-24T07:00:00+05:30",
+    "end": "2026-11-25T19:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "Suresh आपकी मशीन (ट्रैक्टर) कल के लिए बुक करना चाहते हैं। हाँ या ना बताएँ।"
+  },
+  {
+   "type": "booking_requested",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-24T02:30:00+00:00",
+    "end": "2026-11-24T04:30:00+00:00"
+   },
+   "now": "2026-11-23T20:00:00+00:00",
+   "text": "Suresh आपकी मशीन (ट्रैक्टर) आज सुबह 8 बजे से सुबह 10 बजे तक के लिए बुक करना चाहते हैं। हाँ या ना बताएँ।"
+  },
+  {
+   "type": "booking_accepted",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-24T08:00:00+05:30",
+    "end": "2026-11-24T11:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "Ramesh ने आपकी बुकिंग पक्की कर दी। अब फ़ोन करें।"
+  },
+  {
+   "type": "booking_rejected",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-24T08:00:00+05:30",
+    "end": "2026-11-24T11:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "Ramesh ने इस बार मना कर दिया। दूसरी मशीन देखें।"
+  },
+  {
+   "type": "booking_expired",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-24T08:00:00+05:30",
+    "end": "2026-11-24T11:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "मालिक ने समय पर जवाब नहीं दिया, बुकिंग रद्द हो गई।"
+  },
+  {
+   "type": "booking_expired_owner",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-24T08:00:00+05:30",
+    "end": "2026-11-24T11:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "आपने समय पर जवाब नहीं दिया, Suresh की बुकिंग रद्द हो गई।"
+  },
+  {
+   "type": "booking_cancelled_by_renter",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-23T09:00:00+05:30",
+    "end": "2026-11-23T10:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "Suresh ने आज की बुकिंग रद्द कर दी।"
+  },
+  {
+   "type": "booking_cancelled_by_owner",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-26T09:00:00+05:30",
+    "end": "2026-11-26T10:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "Ramesh ने 26 गुरु की बुकिंग रद्द कर दी।"
+  },
+  {
+   "type": "booking_completed",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-22T07:00:00+05:30",
+    "end": "2026-11-22T10:00:00+05:30"
+   },
+   "now": "2026-11-23T07:30:00+05:30",
+   "text": "22 रवि का काम पूरा हुआ।"
+  },
+  {
+   "type": "booking_completed",
+   "params": {
+    "renter": "Suresh",
+    "owner": "Ramesh",
+    "machine": "ट्रैक्टर",
+    "implement": null,
+    "start": "2026-11-23T07:00:00+05:30",
+    "end": "2026-11-23T08:00:00+05:30"
+   },
+   "now": "2026-11-23T20:00:00+05:30",
+   "text": "आज का काम पूरा हुआ।"
+  }
+ ]
+}

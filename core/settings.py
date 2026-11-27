@@ -115,6 +115,9 @@ FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "agriverse-main")
 # Where the app uploads photos (Firebase Storage, region asia-south1). PATCH /api/me/
 # only accepts photo links that point into this bucket. See firebase/storage.rules in the app repo.
 FIREBASE_STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", f"{FIREBASE_PROJECT_ID}.firebasestorage.app")
+# Sending pushes (Phase 5 slice 7) DOES need a secret: a service-account JSON file kept OUTSIDE git, allowed to
+# send pushes only. Its path goes in .env (locally) or is a Render secret file. Empty = pushes are off.
+FIREBASE_CREDENTIALS_PATH = os.environ.get("FIREBASE_CREDENTIALS_PATH", "").strip()
 
 # --- REST API ----------------------------------------------------------------
 

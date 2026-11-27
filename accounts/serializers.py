@@ -68,6 +68,11 @@ class RefreshOnlySerializer(serializers.Serializer):
     refresh = serializers.CharField(max_length=2048)
 
 
+class LogoutSerializer(RefreshOnlySerializer):
+    # This phone's push address (slice 7): forgotten too, so the next person here never gets these pushes.
+    device_token = serializers.CharField(max_length=512, required=False, allow_blank=True)
+
+
 def profile_photo_path(firebase_uid: str) -> str:
     """The one place a user's profile photo may live (same path as firebase/storage.rules)."""
     return f"profiles/{firebase_uid}/avatar.jpg"

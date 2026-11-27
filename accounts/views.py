@@ -7,6 +7,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from core.errors import ApiError
+from notifications.models import DeviceToken
 
 from . import firebase
 from .models import Address, User
@@ -14,8 +15,8 @@ from .phone import is_indian_mobile
 from .serializers import (
     AddressSerializer,
     FirebaseLoginSerializer,
+    LogoutSerializer,
     MeUpdateSerializer,
-    RefreshOnlySerializer,
     UserSerializer,
 )
 
@@ -99,19 +100,25 @@ class RefreshView(TokenRefreshView):
 
 class LogoutView(APIView):
     """
-    POST /api/auth/logout/   {"refresh": "..."}  → 204
+    POST /api/auth/logout/   {"refresh": "...", "device_token"?: "..."}  → 204
     Kills this phone's session on the server. Works even if the access token
     has already expired, so the farmer can always log out.
+    device_token (slice 7): this phone's push address is deleted too, but only when the refresh token is
+    still valid and belongs to the token's owner (a stranger can't remove someone else's).
     """
 
     permission_classes = [permissions.AllowAny]
     authentication_classes = []
 
     def post(self, request):
-        ser = RefreshOnlySerializer(data=request.data)
+        ser = LogoutSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         try:
-            RefreshToken(ser.validated_data["refresh"]).blacklist()
+            refresh = RefreshToken(ser.validated_data["refresh"])
+            device = ser.validated_data.get("device_token")
+            if device:
+                DeviceToken.objects.filter(token=device, user_id=refresh.payload.get("user_id")).delete()
+            refresh.blacklist()
         except TokenError:
             pass  # already expired or blacklisted: the session is dead either way
         return Response(status=status.HTTP_204_NO_CONTENT)

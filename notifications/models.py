@@ -47,3 +47,32 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"#{self.pk} {self.type} → user #{self.user_id}"
+
+
+class DeviceToken(models.Model):
+    """One phone's push address (05 §3.11, Phase 5 slice 7): its Firebase installation ID (FID), which the app
+    gets from FirebaseMessaging.register() / onRegistered. (Called `token` everywhere; old-style FCM registration
+    tokens are deprecated.)
+
+    A token belongs to ONE person at a time: when someone else logs in on the same phone, the app registers the
+    same token again and it moves to them, so the last person's pushes never reach the next one (BUGS.md #1).
+    Logout deletes it. Firebase saying "unregistered" deletes it too (push.py).
+    """
+
+    class Platform(models.TextChoices):
+        ANDROID = "android"
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="device_tokens")
+    token = models.CharField(max_length=512, unique=True)
+    platform = models.CharField(max_length=10, choices=Platform.choices, default=Platform.ANDROID)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    # A person rarely has more than 2 phones; old tokens beyond this are dropped (oldest first).
+    MAX_PER_USER = 5
+
+    class Meta:
+        ordering = ("-last_seen_at", "-id")
+
+    def __str__(self):
+        return f"{self.platform} token of user #{self.user_id}"

@@ -60,6 +60,13 @@
     both; expiry → `booking_expired` (renter) + `booking_expired_owner`. The app writes the words (glossary §8).
     `GET /api/notifications/`, `unread-count/` (both run the lazy expiry first), `POST read/` ({ids} or {all}).
     Tests reuse the booking fixtures (`notifications/tests/conftest.py`).
+    **Push (slice 7):** `DeviceToken` (the phone's Firebase installation ID, called `token`; moves to whoever registers it
+    last; newest 5 per user), `POST /api/devices/`, `DELETE /api/devices/{token}/`, logout `device_token`. `push.py`:
+    `notify.booking_changed` → `push.after_commit()` → `send()` after the transaction (`fid=`, channel `bookings`, high
+    priority only for requests, Unregistered / SenderIdMismatch → address deleted, any other error logged, never raised).
+    `push_text.py` = the Hindi sentences (copy of the app's; `tests/push_text_cases.json` shared with the app).
+    Key: `FIREBASE_CREDENTIALS_PATH` (a push-only service-account JSON OUTSIDE git; empty = pushes off). The root
+    `conftest.py` forces it empty in tests, so a test can never reach Firebase.
   - `core/storage.py` `bucket_path(url)`: the one check for "is this link a file in OUR bucket?".
     `core/pagination.py` `Pages`: 20 per page → `{count, next_page, results}`.
   - The old `api/` and `equipment/` apps (and the commented-out `core/firebase.py`) were **deleted on `v1`** (cleanup, 2026-11-19). They exist only on `master`.

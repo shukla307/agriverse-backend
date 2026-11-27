@@ -7,6 +7,7 @@ transaction, so a change and its notifications are saved together or not at all:
 
 Rule: the OTHER person hears about it, never the one who did it. A change made by the system (actor None)
 reaches both. A per-day group (old bookings) gives ONE notification, pointing at its first day.
+Slice 7: each saved row is also pushed to that person's phones, AFTER the transaction is saved (push.py).
 """
 
 from collections.abc import Iterable
@@ -14,6 +15,7 @@ from collections.abc import Iterable
 from bookings.models import Booking
 from bookings.serializers import first_name, ist
 
+from . import push
 from .models import Notification
 
 S = Booking.Status
@@ -70,4 +72,6 @@ def booking_changed(bookings: Iterable[int | Booking], to_status: str, actor=Non
             if user_id == actor_id:
                 continue  # you don't get told what you just did
             out.append(Notification(user_id=user_id, booking=first, type=kind, role=who, params=snapshot))
-    return Notification.objects.bulk_create(out)
+    saved = Notification.objects.bulk_create(out)
+    push.after_commit(saved)  # slice 7: to their phones, once this transaction is saved
+    return saved

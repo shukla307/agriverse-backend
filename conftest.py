@@ -14,3 +14,12 @@ def _clear_cache():
 @pytest.fixture
 def api():
     return APIClient()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_pushes(settings, monkeypatch):
+    # Tests never reach Firebase, even when .env points at the real push key (slice 7).
+    from notifications import push
+
+    settings.FIREBASE_CREDENTIALS_PATH = ""
+    monkeypatch.setattr(push, "_app", None)
