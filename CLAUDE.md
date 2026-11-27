@@ -42,7 +42,8 @@
     Mon 2026-11-23 07:30 IST (`freezegun`, dev only). `DayOverride` lives in `listings/` next to WeeklyHours.
     **Decision §23 (2026-11-27): fixed hours + booking in hours.** Migration `listings 0006_fixed_hours` = every
     machine every day 7–19; `WeekSerializer` accepts only that (else 400 `fixed_hours`), create ignores sent hours,
-    `DayView` may only close a day. Bookings: `{option_id, start_at, hours}` (1–12, `availability.check_hours`), no job
+    `DayView` may only close a day (slice 8: S15 step 2 in the app). The owner's `calendar/` busy rows also carry `renter_name` +
+    `work` (work hours on that date, no rest hour); `Plan.status()` = `closed` once no start hour is left that day (BUGS.md #23). Bookings: `{option_id, start_at, hours}` (1–12, `availability.check_hours`), no job
     (`requests.auto_job`: the attachment's first job, else the machine's), one row; estimate only per hour.
     `start-times/?date` → `{start_hours, max_hours, next_free_date}` (`Plan.max_hours`). `hours_for` / `day_free` /
     per-day groups are gone from new bookings (old group rows still read fine).

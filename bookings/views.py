@@ -31,9 +31,11 @@ from listings.views import my_listing
 
 from . import actions
 from . import requests as booking_requests
-from .availability import Plan, bookings_outside, load_plan, window
+from .availability import Plan, bookings_outside, load_plan, window, work_hours_on
 from .models import Booking
-from .serializers import ActionSerializer, CreateSerializer, ListParams, QuoteSerializer, booking_json, ist, money
+from .serializers import (
+    ActionSerializer, CreateSerializer, ListParams, QuoteSerializer, booking_json, first_name, ist, money,
+)
 
 
 def visible_listing(pk) -> Listing:
@@ -62,6 +64,13 @@ def merged(spans: list[tuple[int, int]]) -> list[dict]:
     return [{"start_hour": s, "end_hour": e} for s, e in out]
 
 
+def work_json(day: date, booking: Booking) -> dict | None:
+    """The booking's work hours on this date, or None when only its rest hour spills into it (after midnight)."""
+    s, e = work_hours_on(day, booking)
+    s, e = max(s, 0), min(e, 24)
+    return {"start_hour": s, "end_hour": e} if s < e else None
+
+
 def day_json(plan: Plan, day: date, *, owner: bool) -> dict:
     if not owner and not plan.listing.bookable:
         # Paused or no hours: renters see every day closed (S10 shows "मालिक ने अभी समय नहीं बताया").
@@ -74,9 +83,10 @@ def day_json(plan: Plan, day: date, *, owner: bool) -> dict:
         "open": {"start_hour": open_[0], "end_hour": open_[1]} if open_ else None,
     }
     if owner:
+        # S15 step 2's day sheet (slice 8): who booked and the WORK hours ("busy" also holds the rest hour).
         out["busy"] = [
             {"start_hour": b.start_hour, "end_hour": b.end_hour, "booking_id": b.booking.pk,
-             "status": b.booking.status}
+             "status": b.booking.status, "renter_name": first_name(b.booking.renter), "work": work_json(day, b.booking)}
             for b in busy
         ]
         out["override"] = day in plan.overrides

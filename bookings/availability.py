@@ -131,7 +131,8 @@ class Plan:
     def status(self, day: date) -> str:
         """Calendar colour: closed (बंद) / booked (बुक है: some or all open hours taken) / free (खाली)."""
         open_ = self.open_hours(day)
-        if open_ is None:
+        # Today after its last start hour (BUGS.md #23): nothing can be booked any more, so not "खाली".
+        if open_ is None or at(day, open_[1]) <= next_whole_hour(self.now):
             return "closed"
         if any(b.start_hour < open_[1] and b.end_hour > open_[0] for b in self.busy(day)):
             return "booked"
@@ -173,6 +174,7 @@ def load_plan(listing: Listing, first: date, last: date, now: datetime | None = 
         .filter(active_q(now))
         # A booking late the day before can spill its gap into `first`, so compare reserved ranges.
         .filter(start_at__lt=at(last, 24), blocked_until__gt=at(first, 0))
+        .select_related("renter")  # the owner's calendar names them; one join, no extra query
         .order_by("start_at")
     )
     return Plan(listing=listing, now=now, weekly=weekly, overrides=overrides, bookings=bookings)

@@ -11,6 +11,7 @@ from bookings.models import Booking
 from listings.models import DayOverride
 
 from .conftest import MON, TUE, WED, book
+from .test_create import body
 
 
 def put_day(client, listing, d, **body):
@@ -56,6 +57,32 @@ class TestOneDate:
         tractor.has_schedule = False
         tractor.save()
         assert put_day(as_owner, tractor, TUE, is_closed=True).status_code == 409
+
+
+class TestClosedDayForRenters:
+    """Slice 8's promise: a day the owner closed never offers a start time, in any screen (roadmap S15 ✅ line)."""
+
+    def test_closed_by_the_owner_then_gone_everywhere(self, api, owner, renter, tractor):
+        api.force_authenticate(owner)
+        assert put_day(api, tractor, TUE, is_closed=True).status_code == 200
+        api.force_authenticate(renter)
+        as_renter = api
+        cal = as_renter.get(f"/api/listings/{tractor.pk}/calendar/").json()
+        tue = next(d for d in cal["days"] if d["date"] == TUE.isoformat())
+        assert tue["status"] == "closed" and tue["open"] is None and "override" not in tue  # renters: just "बंद"
+        st = as_renter.get(f"/api/listings/{tractor.pk}/start-times/", {"date": TUE.isoformat()}).json()
+        assert st["start_hours"] == [] and st["next_free_date"] == WED.isoformat()
+        res = as_renter.post("/api/bookings/", body(tractor.opt_hour, TUE, 9, 2), format="json")
+        assert res.status_code == 409 and res.json()["error"]["code"] == "outside_hours"
+        assert not Booking.objects.exists()
+
+    def test_opened_again_bookable_again(self, api, owner, renter, tractor):
+        api.force_authenticate(owner)
+        put_day(api, tractor, TUE, is_closed=True)
+        del_day(api, tractor, TUE)
+        api.force_authenticate(renter)
+        st = api.get(f"/api/listings/{tractor.pk}/start-times/", {"date": TUE.isoformat()}).json()
+        assert st["start_hours"][0] == 6  # this fixture's week is 6–18
 
 
 class TestDateWithBookings:

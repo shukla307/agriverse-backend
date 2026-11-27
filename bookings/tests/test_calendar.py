@@ -50,7 +50,10 @@ def test_owner_sees_which_booking(as_owner, tractor, renter):
              expires_at=tractor.created_at + timedelta(days=1))
     DayOverride.objects.create(listing=tractor, date=WED, start_hour=8, end_hour=12)
     body = cal(as_owner, tractor)
-    assert day(body, TUE)["busy"] == [{"start_hour": 8, "end_hour": 12, "booking_id": b.pk, "status": "requested"}]
+    assert day(body, TUE)["busy"] == [{
+        "start_hour": 8, "end_hour": 12, "booking_id": b.pk, "status": "requested",
+        "renter_name": "Suresh", "work": {"start_hour": 8, "end_hour": 11},  # S15's day sheet: who + work only
+    }]
     assert day(body, WED)["override"] is True and day(body, TUE)["override"] is False
 
 
@@ -63,6 +66,16 @@ def test_gap_spilling_past_midnight_shows_on_the_next_day(as_renter, tractor, re
     assert day(body, TUE)["busy"] == [{"start_hour": 22, "end_hour": 24}]
     assert day(body, WED)["busy"] == [{"start_hour": 0, "end_hour": 1}]
     assert day(body, WED)["status"] == "booked"
+
+
+def test_owner_rest_hour_after_midnight_has_no_work(as_owner, tractor, renter):
+    from .conftest import set_week
+
+    set_week(tractor, start=0, end=24)
+    book(tractor, tractor.opt_hour, renter, TUE, 22, 24)
+    body = cal(as_owner, tractor)
+    assert day(body, TUE)["busy"][0]["work"] == {"start_hour": 22, "end_hour": 24}
+    assert day(body, WED)["busy"][0]["work"] is None  # only the rest hour: S15 doesn't list it as a booking
 
 
 def test_a_booking_only_in_the_gap_after_closing_is_not_booked(as_renter, tractor, renter):
@@ -105,3 +118,13 @@ def test_three_queries_whatever_the_bookings(as_renter, tractor, renter, django_
         book(tractor, tractor.opt_hour, renter, MON + timedelta(days=i + 1), 8, 10)
     with django_assert_max_num_queries(7):  # auth user + listing + weekly + overrides + bookings
         cal(as_renter, tractor)
+
+
+def test_today_after_closing_time_is_closed(as_renter, tractor, frozen):
+    """BUGS.md #23 (emulator, 2026-11-27): at 9 PM "आज" was green खाली, but no start time was left."""
+    frozen.move_to("2026-11-23 12:30:00")  # 18:30 IST: this fixture closes at 18, so nothing can start today
+    body = cal(as_renter, tractor)
+    assert day(body, MON)["status"] == "closed"
+    assert day(body, TUE)["status"] == "free"
+    frozen.move_to("2026-11-23 11:00:00")  # 16:30 IST: 17 is still a start hour
+    assert day(cal(as_renter, tractor), MON)["status"] == "free"
