@@ -54,6 +54,12 @@
     ACCEPTED booking); `REASONS` = each side's chips (renter not_needed / found_other / weather / other; the other side's →
     400 `reason: invalid`; migration `0002_renter_reasons`). Accepted meanwhile under the lock + no reason → 409
     `invalid_status`. `GET /api/bookings/?role=renter`: still on first (soonest `start_at`), then newest first.
+  - `notifications/` (Phase 5 slice 6): `Notification` (user, booking, type, role owner|renter, params snapshot, read_at).
+    `notify.booking_changed(rows, to_status, actor)` is called next to EVERY BookingEvent (requests.create, actions.change,
+    expire_overdue, complete_done), in the same transaction: the other person hears, never the actor; system changes reach
+    both; expiry → `booking_expired` (renter) + `booking_expired_owner`. The app writes the words (glossary §8).
+    `GET /api/notifications/`, `unread-count/` (both run the lazy expiry first), `POST read/` ({ids} or {all}).
+    Tests reuse the booking fixtures (`notifications/tests/conftest.py`).
   - `core/storage.py` `bucket_path(url)`: the one check for "is this link a file in OUR bucket?".
     `core/pagination.py` `Pages`: 20 per page → `{count, next_page, results}`.
   - The old `api/` and `equipment/` apps (and the commented-out `core/firebase.py`) were **deleted on `v1`** (cleanup, 2026-11-19). They exist only on `master`.

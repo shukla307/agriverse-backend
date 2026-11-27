@@ -13,7 +13,7 @@ cancelled, or the owner accepted while the renter cancelled without a reason; `f
 400 `reason: required` (reject, any cancel of an accepted booking) / `reason: invalid` (the other side's chip),
 409 `not_started` (काम पूरा हुआ before the work began),
 403 `permission_denied` (e.g. a renter tries to accept), 404 for anyone who isn't the renter or the owner.
-The pushes to the other person come with notifications (slices 6–7).
+Every change also leaves a notification for the other person (notifications/notify.py, slice 6); pushes: slice 7.
 """
 
 from dataclasses import dataclass
@@ -27,6 +27,7 @@ from rest_framework import status
 
 from core.errors import ApiError
 from listings.models import Listing
+from notifications.notify import booking_changed
 
 from .models import Booking, BookingEvent
 
@@ -77,6 +78,7 @@ def expire_overdue(qs: QuerySet, now: datetime) -> list[int]:
             BookingEvent.objects.bulk_create(
                 BookingEvent(booking_id=pk, from_status=S.REQUESTED, to_status=S.EXPIRED) for pk in ids
             )
+            booking_changed(ids, S.EXPIRED)  # the system did it: both hear about it
     return ids
 
 
@@ -120,9 +122,10 @@ def act(*, booking_id: int, user, action: str, reason: str = "", reason_other: s
         elif action == "complete" and now < min(r.start_at for r in rows):
             refused = ApiError("not_started", CONFLICT)
         else:
-            for r in rows:
-                if r.status in rule.allowed_from:  # skips days of a group the system already completed
-                    change(r, rule, action, user, reason, reason_other, now)
+            changed = [r for r in rows if r.status in rule.allowed_from]  # skips days already completed
+            for r in changed:
+                change(r, rule, action, user, reason, reason_other, now)
+            booking_changed(changed, rule.to, actor=user)
     if refused:
         raise refused
     return b
@@ -166,4 +169,5 @@ def complete_done(now: datetime) -> list[int]:
             BookingEvent.objects.bulk_create(
                 BookingEvent(booking_id=pk, from_status=S.ACCEPTED, to_status=S.COMPLETED) for pk in ids
             )
+            booking_changed(ids, S.COMPLETED)
     return ids

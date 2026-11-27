@@ -26,6 +26,7 @@ from rest_framework import status
 from core.errors import ApiError
 from catalog.models import JobCategory
 from listings.models import Listing, ListingOption
+from notifications.notify import booking_changed
 
 from .actions import expire_overdue
 from .availability import IST, Plan, at, check_hours, expires_at_for, hour_of, load_plan, next_whole_hour, window
@@ -129,7 +130,7 @@ def hour_slot(plan: Plan, day: date, start_at: datetime, hours: int) -> Slot:
 
 def expire_stale(listing: Listing, now: datetime) -> int:
     """Lazy expiry (05 §5): requests past their answer time stop holding the machine, before anything new is
-    written. Each gets its history row. The push to the renter comes with notifications (slice 6)."""
+    written. Each gets its history row and its notifications (actions.expire_overdue)."""
     return len(expire_overdue(Booking.objects.filter(listing=listing), now))
 
 
@@ -163,4 +164,5 @@ def create(*, renter, option: ListingOption, start_at: datetime, hours: int, fie
                     rows.append(b)
         except IntegrityError:
             raise ApiError("slot_taken", CONFLICT)
+        booking_changed(rows, Booking.Status.REQUESTED, actor=renter)  # the owner's bell (slice 6)
     return rows

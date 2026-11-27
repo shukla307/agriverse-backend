@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "catalog",
     "listings",
     "bookings",
+    "notifications",
 ]
 
 MIDDLEWARE = [

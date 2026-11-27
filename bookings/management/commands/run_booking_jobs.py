@@ -5,7 +5,7 @@ python manage.py run_booking_jobs   (Render Cron Job every 5 minutes, once v1 ru
   2. accepted work that ended 12+ hours ago → completed
 
 Safe to run as often as you like and at the same time as the app: rows in use are skipped and picked up
-next time. The pushes for both come with notifications (slices 6–7).
+next time. Both leave notifications for the people concerned (slice 6); pushes come in slice 7.
 """
 
 from django.core.management.base import BaseCommand

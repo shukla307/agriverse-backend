@@ -303,7 +303,7 @@ class BookingsView(APIView):
         rows = booking_requests.create(
             renter=request.user, option=option, start_at=d["start_at"], hours=d["hours"], field=d["field"],
         )
-        # The push to the owner ("booking_requested") comes with notifications (slices 6–7).
+        # The owner's notification is saved with the request (requests.create); the push comes in slice 7.
         return Response(booking_json(full_booking(rows[0].pk), group=rows), status=status.HTTP_201_CREATED)
 
 
